@@ -73,6 +73,60 @@ Concretely, the signature is computed over this exact string:
 
 ---
 
+## The shared verifier (timing-safe)
+
+OphirPay ships the canonical receiver-side verifier as
+`verifyWebhookSignature()` in `src/lib/webhook-deliver.ts`. It implements the
+canonical form above **and** the constant-time comparison contract, so you
+should call it instead of hand-rolling the digest comparison:
+
+```ts
+import { verifyWebhookSignature } from "@/lib/webhook-deliver";
+
+const result = verifyWebhookSignature({
+  body: await request.text(),
+  signature: request.headers.get("X-OphirPay-Signature"),
+  timestamp: request.headers.get("X-OphirPay-Timestamp"),
+  secret: process.env.WEBHOOK_SECRET!,
+  // maxAgeSeconds: 300, // replay window; 0 disables it
+});
+if (!result.valid) {
+  // result.reason is one of: "invalid body", "signature mismatch",
+  // "missing or invalid timestamp", "payload too old — possible replay",
+  // "payload timestamp is in the future"
+  return new Response("unauthorized", { status: 401 });
+}
+// 2xx quickly, then process the (deduplicated) event asynchronously.
+```
+
+### Why the comparison must be constant-time
+
+A plain `===` string comparison short-circuits on the first differing byte, so
+an attacker who can time the response can recover a valid signature byte by
+byte. The verifier therefore compares the recomputed and supplied digests with
+`crypto.timingSafeEqual` over their UTF-8 bytes.
+
+Because `crypto.timingSafeEqual` **throws** a `RangeError` when the two buffers
+differ in length, the encoded byte length is checked first. That check is not a
+security hole — the digest length is fixed and public — and it makes a
+truncated, oversized or missing signature return `{ valid: false }` instead of
+crashing the handler:
+
+```ts
+const a = Buffer.from(supplied, "utf8");
+const b = Buffer.from(expected, "utf8");
+// Length is not secret; guard so timingSafeEqual never throws.
+if (a.length !== b.length) return false;
+return timingSafeEqual(a, b);
+```
+
+The reference implementations in
+[`examples/webhook-verification/`](../examples/webhook-verification/) follow the
+same rule: length-check first, then `timingSafeEqual` (Node),
+`hmac.compare_digest` (Python) or `hmac.Equal` (Go).
+
+---
+
 ## Replay protection
 
 The signature proves *authenticity* (the body came from OphirPay and wasn't
