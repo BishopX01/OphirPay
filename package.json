@@ -38,6 +38,9 @@
   ],
   "scripts": {
     "preinstall": "node scripts/check-node.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "secrets:scan": "gitleaks detect --config .gitleaks.toml --redact",
+    "secrets:precommit": "bash scripts/pre-commit-secrets.sh",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
