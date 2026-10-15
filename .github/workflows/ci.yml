@@ -148,6 +148,15 @@ jobs:
         env:
           RUSTFLAGS: "-C link-arg=-s"
         run: cd contracts/emitter && cargo build --target wasm32v1-none --release
+      - name: Run fee assertions and emit fee report
+        run: cargo test --manifest-path contracts/ophirpay/Cargo.toml --test fee_report -- --nocapture
+        env:
+          OPHIRPAY_FEE_REPORT_PATH: ${{ github.workspace }}/fee-report.json
+      - name: Check contract regressions against baseline
+        run: node scripts/check-contract-regressions.mjs
+        env:
+          FEE_REPORT_PATH: fee-report.json
+          REGRESSION_REPORT_PATH: contract-regression-report.md
       - name: Optimize WASM (OphirPay + Emitter)
         run: |
           set -e

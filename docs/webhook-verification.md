@@ -88,9 +88,9 @@ editing it. Reject deliveries whose timestamp is too old or too far in the
 future:
 
 - **Too old** (e.g. older than 5 minutes) — likely a replay of a captured
-  request.
+  request. Verifiers reject this condition with explicit error code `WebhookTimestampExpired`.
 - **In the future** (beyond a small clock-skew allowance, e.g. 5 minutes) —
-  a sign of a fabricated or manipulated payload.
+  a sign of a fabricated or manipulated payload. Verifiers reject this condition with explicit error code `WebhookTimestampFutureSkew`.
 
 OphirPay retries failed deliveries up to 3 attempts using configurable
 exponential backoff (1s, then 2s by default) with the **same payload and
@@ -121,12 +121,16 @@ Runnable, dependency-free examples are in
 
 | Language | File | Run |
 |---|---|---|
+| TypeScript | [`node-verifier.ts`](../examples/webhook-verification/node-verifier.ts) | Library export with `verifyWebhookSignature()` and `assertWebhookSignature()` |
 | Node.js (ESM) | [`node/verify.mjs`](../examples/webhook-verification/node/verify.mjs) | `node verify.mjs --secret <secret> --signature <hex> --body-file body.json` |
 | Python 3 | [`python/verify.py`](../examples/webhook-verification/python/verify.py) | `python3 verify.py --secret <secret> --signature <hex> --body-file body.json` |
+| Go | [`go/verify.go`](../examples/webhook-verification/go/verify.go) | `go run . --secret <secret> --signature <hex> --body-file body.json` |
 
-Both print `VALID` (exit 0) or `INVALID: <reason>` (exit 1), and both
+Reference implementations print `VALID` (exit 0) or `INVALID: <reason>` (exit 1), and
 implement the canonical form above plus a configurable freshness window
-(`--max-age`, default 300s; `--max-age 0` disables it).
+(`--max-age`, default 300s; `--max-age 0` disables it). When timestamps are expired or
+excessively skewed into the future, they emit explicit error codes `WebhookTimestampExpired`
+and `WebhookTimestampFutureSkew`.
 
 ### Sample payload (self-test)
 
