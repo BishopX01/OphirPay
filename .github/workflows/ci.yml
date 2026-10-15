@@ -207,8 +207,10 @@ jobs:
           tmp="$(mktemp -d)"
           printf 'STELLAR_SECRET_KEY=S%s\n' "$(printf 'A%.0s' $(seq 1 55))" > "$tmp/sample.txt"
           set +e
+          # --verbose is required: without it gitleaks prints only the finding
+          # count, not the RuleID this step greps for.
           gitleaks detect --no-git --source "$tmp" --config .gitleaks.toml \
-            --no-banner --redact >/tmp/gitleaks-stellar.log 2>&1
+            --no-banner --redact --verbose >/tmp/gitleaks-stellar.log 2>&1
           rc=$?
           set -e
           if [ "$rc" -eq 1 ] && grep -q "stellar-secret-seed" /tmp/gitleaks-stellar.log; then
