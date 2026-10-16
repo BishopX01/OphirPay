@@ -3,6 +3,7 @@ import { beforeEach } from "vitest";
 import { resetReadCache } from "@/lib/api-cache";
 import { resetFeeStatsCache } from "@/lib/fee-stats";
 import { resetPendingWork } from "@/lib/session-lifecycle";
+import { resetSessionRevocation } from "@/lib/session-revocation";
 
 // The read cache (#741) is process-global by design — that is what makes it
 // useful in production and a cross-test leak in a test run. Reset it before
