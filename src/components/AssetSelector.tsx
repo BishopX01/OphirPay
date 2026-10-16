@@ -17,8 +17,55 @@ import {
   fetchAssetMetadata,
   type ClientAssetMetadata,
 } from "@/lib/asset-metadata-client";
+import { sanitizeImageUrl } from "@/lib/sanitize-url";
 
 // ── Helpers ────────────────────────────────────────────────────
+
+/**
+ * Renders an issuer-supplied asset logo, or the two-letter badge when there is
+ * no logo or the URL failed the sanitizer (issue #1391).
+ *
+ * The URL is passed through `sanitizeImageUrl`, which permits only `https:` and
+ * safe base64 raster `data:` URIs — blocking `javascript:`/`vbscript:` schemes
+ * and script-bearing `image/svg+xml` payloads. It is rendered exclusively via
+ * `<img>` (never raw HTML), with `referrerPolicy="no-referrer"` so the issuer's
+ * host cannot see the referring page.
+ */
+function AssetMark({
+  code,
+  image,
+  className,
+}: {
+  code: string;
+  image?: string | null;
+  className?: string;
+}) {
+  const safe = sanitizeImageUrl(image);
+  if (safe) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- issuer logos are arbitrary remote hosts that cannot be allowlisted for next/image; the URL is sanitized above.
+      <img
+        src={safe}
+        alt=""
+        aria-hidden="true"
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        className={cn("rounded-full object-cover bg-white dark:bg-gray-800", className)}
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "rounded-full bg-ophir-100 dark:bg-ophir-900/30 flex items-center justify-center text-xs font-bold text-ophir-700 dark:text-ophir-300",
+        className,
+      )}
+    >
+      {code.slice(0, 2)}
+    </span>
+  );
+}
 
 const KNOWN_ASSETS: AssetInfo[] = [
   XLM_ASSET,
@@ -202,9 +249,11 @@ export function AssetSelector({
         )}
       >
         <span className="flex items-center gap-2">
-          <span className="w-6 h-6 rounded-full bg-ophir-100 dark:bg-ophir-900/30 flex items-center justify-center text-xs font-bold text-ophir-700 dark:text-ophir-300">
-            {selectedAsset.code.slice(0, 2)}
-          </span>
+          <AssetMark
+            code={selectedAsset.code}
+            image={metadata[`${selectedAsset.code}:${selectedAsset.issuer}`]?.image}
+            className="w-6 h-6"
+          />
           <span className="text-gray-900 dark:text-white font-medium">
             {selectedAsset.code}
           </span>
@@ -256,9 +305,11 @@ export function AssetSelector({
                   )}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-ophir-100 dark:bg-ophir-900/30 flex items-center justify-center text-xs font-bold text-ophir-700 dark:text-ophir-300">
-                      {asset.code.slice(0, 2)}
-                    </span>
+                    <AssetMark
+                      code={asset.code}
+                      image={metadata[key]?.image}
+                      className="w-6 h-6"
+                    />
                     <div className="text-left">
                       <span className="text-gray-900 dark:text-white font-medium">
                         {asset.code}
