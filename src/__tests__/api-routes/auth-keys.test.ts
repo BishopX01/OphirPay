@@ -301,8 +301,9 @@ describe("API Routes: Auth, CSRF & Keys", () => {
       expect(res.status).toBe(201);
       const data = await res.json();
       expect(data.data.id).toBe("key_created_1");
-      // Issue #701: 32 CSPRNG bytes (64 hex) behind the oph_ prefix.
-      expect(data.data.key).toMatch(/^oph_[a-f0-9]{64}$/);
+      expect(data.data.key).toMatch(
+        /^(op_(?:live|test)_[0-9a-f]{64}_[0-9a-f]{8}|oph_[a-f0-9]{64})$/
+      );
 
       const createArgs = vi.mocked(prisma.apiKey.create).mock.calls[0]![0] as {
         data: { keyHash: string; prefix: string };
