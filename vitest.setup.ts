@@ -9,6 +9,10 @@ import { resetPendingWork } from "@/lib/session-lifecycle";
 // every test so a cached payload from one case can never satisfy another.
 beforeEach(async () => {
   await resetReadCache();
+  // Session revocation (#1399) is process- and Redis-global for the same
+  // reason; a wallet revoked by one case must not be treated as revoked by the
+  // next. Only writes this process made are cleared, so this stays cheap.
+  await resetSessionRevocation();
   // Same reasoning for the Horizon fee-statistics cache (#825): a cached
   // sample from one case must not drive another case's recommended fee.
   //
