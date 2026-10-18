@@ -200,6 +200,16 @@ services:
       - NODE_ENV=production
 ```
 
+### Local Development with Hot Reload (`docker-compose.dev.yml`)
+
+For local development with live code editing and hot reload (`next dev`), use `docker-compose.dev.yml`:
+
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+This mounts your local repository files, sets `NODE_ENV=development`, and runs `npm run dev` alongside PostgreSQL and Redis services.
+
 ### Docker Build Only (Without Compose)
 
 ```bash
