@@ -1100,3 +1100,89 @@ fn test_dispute_cooling_off_timeout_and_mutual_bypass() {
     let escrow_2 = fix.client.get_escrow(&escrow_id_2);
     assert!(escrow_2.released);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STREAM CANCELLATION PRO-RATA REFUND & ZERO-DURATION (#1357)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_stream_cancel_pro_rata_refund_at_0_25_50_75_100_percent() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 1_000_000);
+
+    let total = 100_000i128;
+    let start = 1_000_000u64;
+    let end = start + 1_000; // 1000 seconds
+
+    // Test at 0%, 25%, 50%, 75%, 100%
+    let percentages = [(0u64, 0i128, 100_000i128),
+                       (250u64, 25_000i128, 75_000i128),
+                       (500u64, 50_000i128, 50_000i128),
+                       (750u64, 75_000i128, 25_000i128),
+                       (1000u64, 100_000i128, 0i128)];
+
+    for (elapsed, exp_vested, exp_unvested) in percentages {
+        let stream_id = fix.client.create_stream(
+            &creator,
+            &recipient,
+            &total,
+            &fix.token_id,
+            &start,
+            &end,
+            &String::from_str(&fix.env, "cancel_stream_test"),
+        );
+
+        fix.env.ledger().set_timestamp(start + elapsed);
+
+        // Preview split
+        let split = fix.client.get_stream_cancel_split(&stream_id);
+        assert_eq!(split, (0i128, exp_vested, exp_unvested));
+        assert_eq!(split.0 + split.1 + split.2, total);
+
+        let unvested_refunded = fix.client.cancel_stream(&creator, &stream_id);
+        assert_eq!(unvested_refunded, exp_unvested);
+
+        let stream = fix.client.get_stream(&stream_id);
+        assert!(stream.cancelled);
+        assert_eq!(stream.claimed_amount, exp_vested);
+    }
+}
+
+#[test]
+fn test_stream_cancel_odd_duration_and_partial_claim_conservation() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    let prime_principal = 1_000_003i128; // Prime principal
+    fix.mint(&creator, prime_principal);
+
+    let start = 1_000_000u64;
+    let end = start + 777; // Odd duration
+    let stream_id = fix.client.create_stream(
+        &creator,
+        &recipient,
+        &prime_principal,
+        &fix.token_id,
+        &start,
+        &end,
+        &String::from_str(&fix.env, "odd_stream"),
+    );
+
+    // Partial claim at elapsed 200s
+    fix.env.ledger().set_timestamp(start + 200);
+    let claimed = fix.client.claim_stream(&recipient, &stream_id);
+    assert!(claimed > 0);
+
+    // Cancel at elapsed 555s
+    fix.env.ledger().set_timestamp(start + 555);
+    let split = fix.client.get_stream_cancel_split(&stream_id);
+    assert_eq!(split.0, claimed);
+    // Solvency conservation invariant holds exactly
+    assert_eq!(split.0 + split.1 + split.2, prime_principal);
+
+    let refunded = fix.client.cancel_stream(&creator, &stream_id);
+    assert_eq!(refunded, split.2);
+}
+

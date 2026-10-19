@@ -2779,11 +2779,29 @@ impl OphirPayContract {
         }
 
         let now = env.ledger().timestamp();
-        let vested = compute_vested(stream.total_amount, stream.start_time, stream.end_time, now);
+        let duration = stream.end_time.saturating_sub(stream.start_time);
+        let vested = if duration == 0 || now >= stream.end_time {
+            stream.total_amount
+        } else if now <= stream.start_time {
+            0
+        } else {
+            compute_vested(stream.total_amount, stream.start_time, stream.end_time, now)
+        };
+
         let earned_unclaimed = vested
             .checked_sub(stream.claimed_amount)
             .ok_or(PaymentError::StreamInvariantViolated)?;
         let unvested = stream.total_amount.saturating_sub(vested);
+
+        // Strict conservation check: claimed + earned_unclaimed + unvested == total_amount
+        if stream
+            .claimed_amount
+            .saturating_add(earned_unclaimed)
+            .saturating_add(unvested)
+            != stream.total_amount
+        {
+            return Err(PaymentError::StreamInvariantViolated);
+        }
 
         stream.cancelled = true;
         stream.claimed_amount = vested;
@@ -2829,6 +2847,35 @@ impl OphirPayContract {
     /// Get stream count
     pub fn get_stream_count(env: Env) -> u64 {
         env.storage().instance().get(&STREAM_COUNT).unwrap_or(0)
+    }
+
+    /// Get stream cancellation split preview: (claimed, earned_unclaimed, unvested).
+    pub fn get_stream_cancel_split(
+        env: Env,
+        stream_id: u64,
+    ) -> Result<(i128, i128, i128), PaymentError> {
+        let stream: Stream = env
+            .storage()
+            .persistent()
+            .get(&(STREAM_KEY, stream_id))
+            .ok_or(PaymentError::StreamNotFound)?;
+
+        let now = env.ledger().timestamp();
+        let duration = stream.end_time.saturating_sub(stream.start_time);
+        let vested = if duration == 0 || now >= stream.end_time {
+            stream.total_amount
+        } else if now <= stream.start_time {
+            0
+        } else {
+            compute_vested(stream.total_amount, stream.start_time, stream.end_time, now)
+        };
+
+        let earned_unclaimed = vested
+            .checked_sub(stream.claimed_amount)
+            .ok_or(PaymentError::StreamInvariantViolated)?;
+        let unvested = stream.total_amount.saturating_sub(vested);
+
+        Ok((stream.claimed_amount, earned_unclaimed, unvested))
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -3671,4 +3718,4 @@ impl OphirPayContract {
         }
     }
 }
-
+
