@@ -30,12 +30,18 @@ servers:
     description: Local development
   - url: https://api.ophirpay.com
     description: Production
+  - url: https://soroban-testnet.stellar.org
+    description: Stellar Soroban Testnet RPC
+  - url: https://horizon-testnet.stellar.org
+    description: Stellar Horizon Testnet
 
 security:
   - ApiKeyAuth: []
   - BearerAuth: []
 
 tags:
+  - name: Documentation
+    description: OpenAPI specification and interactive documentation
   - name: Payments
     description: Individual payment operations
   - name: Batches
@@ -2587,6 +2593,25 @@ paths:
           description: Malformed or unrecognised report body
         "413":
           description: Body exceeds the 16 KiB size limit
+
+  # ── Documentation ─────────────────────────────────────────
+  /api/openapi.json:
+    get:
+      tags: [Documentation]
+      summary: OpenAPI specification in JSON format
+      description: |
+        Returns the parsed OpenAPI 3.1.0 specification for OphirPay in JSON
+        format. Used by internal interactive documentation at `/docs/api`,
+        developer SDK generators, Postman/Insomnia imports, and external tooling.
+      security: []
+      responses:
+        "200":
+          description: Parsed OpenAPI specification document
+          content:
+            application/json:
+              schema:
+                type: object
+                description: OpenAPI 3.1.0 specification object
 
 # ── Components ────────────────────────────────────────────────
 components:

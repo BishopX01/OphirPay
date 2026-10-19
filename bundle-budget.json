@@ -10,6 +10,7 @@
     "/batches/[id]": 565,
     "/batches/new": 570,
     "/contracts": 560,
+    "/docs/api": 570,
     "/escrows": 570,
     "/events": 560,
     "/fee-config": 570,

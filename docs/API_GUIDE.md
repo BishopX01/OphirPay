@@ -22,7 +22,8 @@ endpoints are consistent, secure, and maintainable.
 7. [Rate-limit integration](#7-rate-limit-integration)
 8. [Worked example](#8-worked-example)
 9. [Testing your endpoint](#9-testing-your-endpoint)
-10. [Checklist](#checklist)
+10. [Interactive API Documentation & OpenAPI Explorer](#10-interactive-api-documentation--openapi-explorer)
+11. [Checklist](#checklist)
 
 ---
 
@@ -506,6 +507,21 @@ npm run typecheck   # tsc --noEmit
 npm run lint        # eslint .
 npm test            # vitest run
 ```
+
+---
+
+## 10. Interactive API Documentation & OpenAPI Explorer
+
+OphirPay provides built-in interactive OpenAPI documentation and a live testing playground directly within the application:
+
+- **Interactive Explorer Route**: `/docs/api` (implemented in `src/app/docs/api/page.tsx` and `src/app/docs/api/ApiDocsClient.tsx`).
+- **Raw OpenAPI JSON Spec Route**: `/api/openapi.json` (implemented in `src/app/api/openapi.json/route.ts`).
+- **Committed Specification**: [`docs/openapi.yaml`](./openapi.yaml).
+
+### Key Features
+1. **Interactive "Try It Out"**: Directly test endpoints against Stellar Testnet nodes (`https://soroban-testnet.stellar.org`, `https://horizon-testnet.stellar.org`), local development (`http://localhost:3000`), or production APIs.
+2. **Strict CSP Compliance**: Built with native Next.js App Router components without external script injections or un-nonced inline scripts, strictly complying with the CSP policy in `src/proxy.ts`.
+3. **Automated Drift Protection**: CI guards verify bidirectional conformance (`src/__tests__/openapi-conformance.test.ts`) and ensure all client SDK packages are up to date (`node scripts/generate-api-client.mjs --check`).
 
 ---
 
