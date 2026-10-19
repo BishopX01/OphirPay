@@ -564,6 +564,74 @@ impl OphirPayContract {
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  TOKEN DECIMAL PRECISION CONFIGURATION (#1347)
+    // ═══════════════════════════════════════════════════════════
+
+    /// Configure allowable decimal precision for a specific token asset (owner only).
+    pub fn set_token_decimals(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        decimals: u32,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        env.storage()
+            .persistent()
+            .set(&(TOKEN_DEC_KEY, asset.clone()), &decimals);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(TOKEN_DEC_KEY, asset), BUMP_MIN_TTL, BUMP_MAX_TTL);
+        Ok(())
+    }
+
+    /// Query configured decimal places for a token asset (defaults to 7 for Stellar standard).
+    pub fn get_token_decimals(env: Env, asset: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&(TOKEN_DEC_KEY, asset))
+            .unwrap_or(DEFAULT_STELLAR_DECIMALS)
+    }
+
+    /// Calculate minimum quantum step in stroops for given decimal precision.
+    pub fn token_quantum_step(decimals: u32) -> Result<i128, PaymentError> {
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        if decimals < DEFAULT_STELLAR_DECIMALS {
+            let exp = DEFAULT_STELLAR_DECIMALS - decimals;
+            let mut step: i128 = 1;
+            for _ in 0..exp {
+                step = step.saturating_mul(10);
+            }
+            Ok(step)
+        } else {
+            Ok(1)
+        }
+    }
+
+    /// Validate that an amount complies with the token asset's decimal precision.
+    pub fn validate_token_decimal_precision(
+        env: &Env,
+        asset: &Address,
+        amount: i128,
+    ) -> Result<(), PaymentError> {
+        let decimals: u32 = env
+            .storage()
+            .persistent()
+            .get(&(TOKEN_DEC_KEY, asset.clone()))
+            .unwrap_or(DEFAULT_STELLAR_DECIMALS);
+        let step = Self::token_quantum_step(decimals)?;
+        if step > 1 && amount % step != 0 {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        Ok(())
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  TIMELOCKED ACTIONS — 24h delay on sensitive admin ops
     // ═══════════════════════════════════════════════════════════
 
@@ -2090,6 +2158,7 @@ impl OphirPayContract {
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
+        Self::validate_token_decimal_precision(&env, &asset, amount)?;
 
         // Idempotency (#804): (payer, tx_hash) identifies a payment. Replaying
         // the same call returns the original id; replaying it with a different

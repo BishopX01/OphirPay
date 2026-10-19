@@ -385,4 +385,10 @@ pub const MIN_STREAM_DURATION: u64 = 60;
 /// Maximum duration for a payment stream (5 years in seconds: 157,680,000s) (#1350).
 pub const MAX_STREAM_DURATION: u64 = 5 * 365 * 86_400;
 
+/// Default decimal places for Stellar classic and standard tokens (XLM, USDC on Stellar have 7 decimals) (#1347).
+pub const DEFAULT_STELLAR_DECIMALS: u32 = 7;
+
+/// Maximum allowable decimal precision for custom tokens (0 to 18 decimals) (#1347).
+pub const MAX_TOKEN_DECIMALS: u32 = 18;
+
 

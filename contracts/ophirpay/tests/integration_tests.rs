@@ -1125,5 +1125,124 @@ fn test_fee_config_and_collector_update_emits_on_chain_event() {
     assert!(!contract_events.events().is_empty());
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Token Decimal Precision Validation (#1347)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_record_payment_standard_7_decimals_succeeds() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+
+    // Default asset (7 decimals) accepts any valid stroop amount
+    let id1 = fix.client.record_payment(
+        &payer,
+        &payee,
+        &1i128,
+        &fix.token_id,
+        &String::from_str(&fix.env, "tx_1"),
+        &String::from_str(&fix.env, "meta_1"),
+    );
+    assert_eq!(id1, 1);
+
+    let id2 = fix.client.record_payment(
+        &payer,
+        &payee,
+        &12_345_678i128,
+        &fix.token_id,
+        &String::from_str(&fix.env, "tx_2"),
+        &String::from_str(&fix.env, "meta_2"),
+    );
+    assert_eq!(id2, 2);
+}
+
+#[test]
+fn test_record_payment_custom_decimals_precision_enforced() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    let custom_asset = Address::generate(&fix.env);
+
+    // Configure 2 decimals for fiat-like token (1 cent = 100_000 stroops)
+    fix.client.set_token_decimals(&fix.owner, &custom_asset, &2u32);
+    assert_eq!(fix.client.get_token_decimals(&custom_asset), 2);
+
+    // Exact cent multiple (5 cents = 500_000 stroops) succeeds
+    let id = fix.client.record_payment(
+        &payer,
+        &payee,
+        &500_000i128,
+        &custom_asset,
+        &String::from_str(&fix.env, "tx_cents_valid"),
+        &String::from_str(&fix.env, "cents_ok"),
+    );
+    assert_eq!(id, 1);
+
+    // Sub-cent fractional amount (500_001 stroops) violates decimal precision
+    let res = fix.client.try_record_payment(
+        &payer,
+        &payee,
+        &500_001i128,
+        &custom_asset,
+        &String::from_str(&fix.env, "tx_cents_invalid"),
+        &String::from_str(&fix.env, "cents_fail"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::InvalidDecimalPrecision)));
+}
+
+#[test]
+fn test_record_payment_indivisible_0_decimals_enforced() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    let indivisible_asset = Address::generate(&fix.env);
+
+    // Configure 0 decimals (indivisible units: 1 unit = 10_000_000 stroops)
+    fix.client.set_token_decimals(&fix.owner, &indivisible_asset, &0u32);
+    assert_eq!(fix.client.get_token_decimals(&indivisible_asset), 0);
+
+    // Whole unit (3 units = 30_000_000 stroops) succeeds
+    let id = fix.client.record_payment(
+        &payer,
+        &payee,
+        &30_000_000i128,
+        &indivisible_asset,
+        &String::from_str(&fix.env, "tx_whole"),
+        &String::from_str(&fix.env, "whole_ok"),
+    );
+    assert_eq!(id, 1);
+
+    // Fractional unit (10_500_000 stroops) fails
+    let res = fix.client.try_record_payment(
+        &payer,
+        &payee,
+        &10_500_000i128,
+        &indivisible_asset,
+        &String::from_str(&fix.env, "tx_fractional"),
+        &String::from_str(&fix.env, "fractional_fail"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::InvalidDecimalPrecision)));
+}
+
+#[test]
+fn test_set_token_decimals_bounds_and_auth() {
+    let fix = TestFixture::new();
+    let non_owner = Address::generate(&fix.env);
+    let asset = Address::generate(&fix.env);
+
+    // Non-owner unauthorized
+    let res_auth = fix.client.try_set_token_decimals(&non_owner, &asset, &6u32);
+    assert_eq!(res_auth, Err(Ok(PaymentError::Unauthorized)));
+
+    // Decimals exceeding MAX_TOKEN_DECIMALS (18) fails
+    let res_bounds = fix.client.try_set_token_decimals(&fix.owner, &asset, &19u32);
+    assert_eq!(res_bounds, Err(Ok(PaymentError::InvalidDecimalPrecision)));
+
+    // Decimals at boundary 18 succeeds
+    fix.client.set_token_decimals(&fix.owner, &asset, &18u32);
+    assert_eq!(fix.client.get_token_decimals(&asset), 18);
+}
+
 
 

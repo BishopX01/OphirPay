@@ -320,6 +320,7 @@ export const CONTRACT_ERROR_MAP: Record<string, string> = {
   "309": "Idempotency key was reused for a different payment payload",
   "310": "Stream duration is too short: minimum duration is 60 seconds",
   "311": "Stream duration is too long: maximum duration is 5 years",
+  "312": "Payment amount violates token decimal precision constraints",
 };
 
 /**

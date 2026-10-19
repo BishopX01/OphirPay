@@ -665,5 +665,8 @@ pub enum PaymentError {
     StreamDurationTooShort = 310,
     /// Stream duration is too long: maximum duration is 5 years
     StreamDurationTooLong = 311,
+    // ── Token Decimal Precision (312) ───────────────────────────
+    /// Payment amount violates token decimal precision constraints
+    InvalidDecimalPrecision = 312,
 }
 
