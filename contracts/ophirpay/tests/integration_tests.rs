@@ -781,20 +781,20 @@ fn test_stream_vesting_overflow_pays_correct_balance_end_to_end() {
         &total,
         &fix.token_id,
         &now,
-        &(now + 4),
+        &(now + 100),
         &String::from_str(&fix.env, "overflow e2e"),
     );
     assert_eq!(stream_id, 1);
 
-    // Half-way through the schedule: `total * 2` overflows i128. Before the
+    // Half-way through the schedule: `total * 50` overflows i128. Before the
     // fix this vested 0, so the recipient could claim nothing at all.
-    fix.env.ledger().set_timestamp(now + 2);
+    fix.env.ledger().set_timestamp(now + 50);
     let claimed = fix.client.claim_stream(&recipient, &stream_id);
     assert!(claimed > 0, "overflow must not collapse vesting to zero");
     assert_eq!(claimed, total / 2);
 
     // Past the end time the remainder is claimable and drains the stream.
-    fix.env.ledger().set_timestamp(now + 100);
+    fix.env.ledger().set_timestamp(now + 150);
     let remainder = fix.client.claim_stream(&recipient, &stream_id);
     assert_eq!(remainder, total - (total / 2));
 
@@ -1085,7 +1085,7 @@ fn test_fee_config_and_collector_update_emits_on_chain_event() {
     let collector_1 = Address::generate(&fix.env);
     let collector_2 = Address::generate(&fix.env);
 
-    // Initial fee configuration
+    // Initial fee configuration emits on-chain event
     fix.client.set_fee_config(
         &fix.owner,
         &50u32,
@@ -1095,18 +1095,26 @@ fn test_fee_config_and_collector_update_emits_on_chain_event() {
         &1i128,
         &true,
     );
+    use soroban_sdk::testutils::Events as _;
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
+
     let config = fix.client.get_fee_config().unwrap();
     assert_eq!(config.payment_fee_bps, 50);
 
-    // Set collector
+    // Set collector emits on-chain event
     fix.client.set_fee_collector(&fix.owner, &collector_1);
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
     assert_eq!(fix.client.get_fee_collector(), Some(collector_1.clone()));
 
-    // Update collector
+    // Update collector emits on-chain event
     fix.client.set_fee_collector(&fix.owner, &collector_2);
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
     assert_eq!(fix.client.get_fee_collector(), Some(collector_2.clone()));
 
-    // Update fee config again
+    // Update fee config again emits on-chain event
     fix.client.set_fee_config(
         &fix.owner,
         &100u32,
@@ -1116,13 +1124,11 @@ fn test_fee_config_and_collector_update_emits_on_chain_event() {
         &2i128,
         &true,
     );
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
+
     let updated_config = fix.client.get_fee_config().unwrap();
     assert_eq!(updated_config.payment_fee_bps, 100);
-
-    // Verify events were emitted
-    use soroban_sdk::testutils::Events as _;
-    let contract_events = fix.env.events().all().filter_by_contract(&fix.contract_id);
-    assert!(!contract_events.events().is_empty());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
