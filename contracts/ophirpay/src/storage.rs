@@ -39,6 +39,13 @@ pub const HOOK_KEY: Symbol = symbol_short!("H_REC");
 pub const PENDING_REVOC_KEY: Symbol = symbol_short!("PR_REV");
 pub const VOTE_KEY: Symbol = symbol_short!("V_REC");
 pub const BATCH_KEY: Symbol = symbol_short!("B_REC");
+/// Persisted header for a multi-asset batch (#1403).
+pub const MULTI_BATCH_KEY: Symbol = symbol_short!("MB_REC");
+/// Multi-asset batch sequence number, kept separate from `BATCH_COUNT` so the
+/// single-asset and multi-asset readers never look up the wrong record.
+pub const MULTI_BATCH_COUNT: Symbol = symbol_short!("MB_CNT");
+/// Cumulative protocol fees collected per token contract (#1403).
+pub const ASSET_FEE_KEY: Symbol = symbol_short!("A_FEE");
 pub const RECUR_CNT: Symbol = symbol_short!("REC_CNT");
 pub const REFUND_CNT: Symbol = symbol_short!("REF_CNT");
 pub const FEE_KEY: Symbol = symbol_short!("FEE_CONF");
