@@ -11,6 +11,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://ophirpay:ophirpay@db:5432/ophirpay
       - NODE_ENV=production
+      - HOSTNAME=0.0.0.0
       # Redis-backed rate limiting over TCP (Node runtime).
       # NOTE: the global limiter in src/proxy.ts runs on the Edge runtime and
       # cannot use this TCP client, so in a multi-replica deployment it stays

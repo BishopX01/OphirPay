@@ -55,6 +55,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME="0.0.0.0"
 
 COPY --chown=node:node --from=builder /app/public ./public
 COPY --chown=node:node --from=builder /app/package.json ./package.json

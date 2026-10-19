@@ -21,28 +21,28 @@ function validateMemoText(memo: string): { valid: boolean; error?: string } {
 
 describe("Contract Memo Validation (#1360)", () => {
   describe("Error Catalog & ABI Parity", () => {
-    it("maps error code 310 to MemoTooLong across all error registries", () => {
-      expect(PAYMENT_ERROR_NAMES[310]).toBe("MemoTooLong");
-      expect(PAYMENT_ERROR_DISCRIMINANTS["MemoTooLong"]).toBe(310);
-      expect(PaymentErrorCode.MemoTooLong).toBe(310);
-      expect(ERROR_MESSAGES[310]).toContain("Memo exceeds maximum byte length (64 bytes)");
-      expect(PAYMENT_ERROR_MESSAGES[310]).toContain("Memo exceeds maximum byte length (64 bytes)");
+    it("maps error code 313 to MemoTooLong across all error registries", () => {
+      expect(PAYMENT_ERROR_NAMES[313]).toBe("MemoTooLong");
+      expect(PAYMENT_ERROR_DISCRIMINANTS["MemoTooLong"]).toBe(313);
+      expect(PaymentErrorCode.MemoTooLong).toBe(313);
+      expect(ERROR_MESSAGES[313]).toContain("Payment memo exceeds maximum length");
+      expect(PAYMENT_ERROR_MESSAGES[313]).toContain("Payment memo exceeds maximum length");
     });
 
-    it("decodes contract error 310 in decodeContractError", () => {
-      expect(decodeContractError("Error(Contract, #310)")).toBe(
-        "Memo exceeds maximum byte length (64 bytes) or contains invalid characters"
+    it("decodes contract error 313 in decodeContractError", () => {
+      expect(decodeContractError("Error(Contract, #313)")).toBe(
+        "Payment memo exceeds maximum length or contains invalid control characters"
       );
-      expect(decodeContractError("310")).toBe(
-        "Memo exceeds maximum byte length (64 bytes) or contains invalid characters"
+      expect(decodeContractError("313")).toBe(
+        "Payment memo exceeds maximum length or contains invalid control characters"
       );
     });
 
     it("includes MemoTooLong in getContractErrorCatalog", () => {
       const catalog = getContractErrorCatalog();
-      const entry = catalog.find((e) => e.code === "310");
+      const entry = catalog.find((e) => e.code === "313");
       expect(entry).toBeDefined();
-      expect(entry?.message).toContain("Memo exceeds maximum byte length (64 bytes)");
+      expect(entry?.message).toContain("Payment memo exceeds maximum length");
     });
   });
 
