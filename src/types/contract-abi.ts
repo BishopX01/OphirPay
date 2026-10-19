@@ -53,6 +53,8 @@ export interface EscrowData {
   released: boolean;
   claimed: boolean;
   metadata: string;
+  /** Unix timestamp when a dispute was opened; 0/undefined when none. */
+  dispute_initiated_at?: number;
 }
 
 // ── Payment Stream ──────────────────────────────────────────

@@ -3878,6 +3878,223 @@ impl OphirPayContract {
         })
     }
 
+/// Execute a batch whose legs may each use a different SAC token (#1403).
+    ///
+    /// Every valid leg is settled atomically in one invocation:
+    ///
+    /// * the payer's protocol fee for that leg is collected into the configured
+    ///   fee collector (subject to the same `payment_fee_bps` policy as
+    ///   `record_payment`);
+    /// * the principal is transferred from `creator` to the leg's payee using
+    ///   that leg's token contract; and
+    /// * a [`Payment`] record is written with the leg's asset, so the audit
+    ///   trail never attributes funds to the wrong token.
+    ///
+    /// Fees are accumulated per token rather than into one cross-asset total,
+    /// because 1 stroop of XLM and 1 stroop of USDC are not the same unit. The
+    /// per-batch breakdown is returned in [`MultiAssetBatchResult::fees`] and
+    /// the lifetime total is readable via [`Self::get_asset_fee_total`].
+    ///
+    /// Zero/negative-amount legs are skipped and counted in `failed`, matching
+    /// `create_batch`'s partial-failure semantics. If every leg is invalid the
+    /// call fails with [`PaymentError::BatchEmpty`] and no state changes.
+    pub fn execute_multi_asset_batch(
+        env: Env,
+        creator: Address,
+        payments: Vec<MultiAssetPayment>,
+        tx_hash: String,
+    ) -> Result<MultiAssetBatchResult, PaymentError> {
+        // Token-moving entrypoint: take the same reentrancy guard as escrows.
+        let _guard = acquire_reentrancy_lock(&env)?;
+        creator.require_auth();
+        require_not_paused(&env, PauseScope::Batches)?;
+        validate_memo_text(&tx_hash)?;
+
+        let len = payments.len();
+        if len == 0 {
+            return Err(PaymentError::BatchEmpty);
+        }
+        if len > 100 {
+            return Err(PaymentError::BatchTooLarge);
+        }
+
+        let mut successful: u32 = 0;
+        let mut total_amount: i128 = 0;
+        let mut pay_count: u64 = env.storage().instance().get(&PAYMENT_COUNT).unwrap_or(0);
+        let mut payment_ids: Vec<u64> = Vec::new(&env);
+        let mut fees: Vec<AssetFeeTotal> = Vec::new(&env);
+
+        for i in 0..len {
+            let request = payments.get(i).ok_or(PaymentError::InvalidAmount)?;
+
+            // Preserve create_batch's partial-failure contract: invalid legs
+            // are counted, not fatal, as long as at least one leg settles.
+            if request.amount <= 0 {
+                continue;
+            }
+            Self::validate_token_decimal_precision(&env, &request.asset, request.amount)?;
+
+            // Fee first: if the fee transfer fails (missing balance or
+            // trustline) the whole invocation reverts before principal moves.
+            let fee = collect_fee(&env, &creator, &request.asset, request.amount)?;
+
+            // Move the principal from the batch creator to this leg's payee.
+            let token_client = token::Client::new(&env, &request.asset);
+            token_client.transfer(&creator, &request.payee, &request.amount);
+
+            if fee > 0 {
+                // Accumulate within the response, grouping by token contract.
+                let mut matched = false;
+                let mut index = 0;
+                while index < fees.len() {
+                    let mut entry: AssetFeeTotal = fees.get(index).unwrap();
+                    if entry.asset == request.asset {
+                        entry.fee = entry
+                            .fee
+                            .checked_add(fee)
+                            .ok_or(PaymentError::MathOverflow)?;
+                        fees.set(index, entry);
+                        matched = true;
+                        break;
+                    }
+                    index += 1;
+                }
+                if !matched {
+                    fees.push_back(AssetFeeTotal {
+                        asset: request.asset.clone(),
+                        fee,
+                    });
+                }
+
+                // Lifetime accounting is stored per asset for reconciliation.
+                let fee_key = (ASSET_FEE_KEY, request.asset.clone());
+                let cumulative: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+                env.storage().instance().set(
+                    &fee_key,
+                    &cumulative
+                        .checked_add(fee)
+                        .ok_or(PaymentError::MathOverflow)?,
+                );
+            }
+
+            pay_count += 1;
+            successful += 1;
+            total_amount = total_amount
+                .checked_add(request.amount)
+                .ok_or(PaymentError::MathOverflow)?;
+            payment_ids.push_back(pay_count);
+
+            let payment = Payment {
+                id: pay_count,
+                payer: creator.clone(),
+                payee: request.payee.clone(),
+                amount: request.amount,
+                asset: request.asset.clone(),
+                tx_hash: tx_hash.clone(),
+                timestamp: env.ledger().timestamp(),
+                metadata: String::from_str(&env, "multi-asset-batch"),
+                cancelled: false,
+            };
+            env.storage()
+                .persistent()
+                .set(&(PAYMENT_KEY, pay_count), &payment);
+            env.storage().persistent().extend_ttl(
+                &(PAYMENT_KEY, pay_count),
+                BUMP_MIN_TTL,
+                BUMP_MAX_TTL,
+            );
+
+            emit_payment_event(&env, &creator, &request.payee, &request.amount);
+        }
+
+        if successful == 0 {
+            return Err(PaymentError::BatchEmpty);
+        }
+
+        env.storage().instance().set(&PAYMENT_COUNT, &pay_count);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        let mut batch_count: u64 = env
+            .storage()
+            .instance()
+            .get(&MULTI_BATCH_COUNT)
+            .unwrap_or(0);
+        batch_count += 1;
+
+        let batch = MultiAssetBatchRecord {
+            id: batch_count,
+            creator: creator.clone(),
+            total_recipients: successful,
+            timestamp: env.ledger().timestamp(),
+            tx_hash,
+            payment_ids,
+            fees: fees.clone(),
+        };
+        env.storage()
+            .persistent()
+            .set(&(MULTI_BATCH_KEY, batch_count), &batch);
+        env.storage().persistent().extend_ttl(
+            &(MULTI_BATCH_KEY, batch_count),
+            BUMP_MIN_TTL,
+            BUMP_MAX_TTL,
+        );
+        env.storage()
+            .instance()
+            .set(&MULTI_BATCH_COUNT, &batch_count);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        inc_counter(&env, &STAT_BATCHES);
+        add_counter(&env, &STAT_AMT_BATCHED, total_amount);
+        add_u64_counter(&env, &STAT_PAYMENTS, successful as u64);
+
+        record_audit(
+            &env,
+            "multi_asset_batch_executed",
+            &creator,
+            batch_count,
+            "Multi-asset batch executed",
+        );
+
+        Ok(MultiAssetBatchResult {
+            batch_id: batch_count,
+            total_requests: len,
+            successful,
+            failed: len - successful,
+            fees,
+        })
+    }
+
+    /// Get a multi-asset batch by ID (#1403).
+    pub fn get_multi_asset_batch(
+        env: Env,
+        batch_id: u64,
+    ) -> Result<MultiAssetBatchRecord, PaymentError> {
+        env.storage()
+            .persistent()
+            .get(&(MULTI_BATCH_KEY, batch_id))
+            .ok_or(PaymentError::PaymentNotFound)
+    }
+
+    /// Get the number of multi-asset batches executed (#1403).
+    pub fn get_multi_asset_batch_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&MULTI_BATCH_COUNT)
+            .unwrap_or(0)
+    }
+
+    /// Lifetime protocol fees collected for one token contract (#1403).
+    pub fn get_asset_fee_total(env: Env, asset: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&(ASSET_FEE_KEY, asset))
+            .unwrap_or(0)
+    }
+
     /// Get a batch by ID
     pub fn get_batch(env: Env, batch_id: u64) -> Result<BatchPayment, PaymentError> {
         env.storage()
