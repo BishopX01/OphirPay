@@ -26,7 +26,11 @@ import { withMetrics } from "@/lib/metrics-middleware";
 
 import { createLiveEventSource } from "@/lib/events/event-source";
 import { createBoundedSseBuffer } from "@/lib/events/sse-buffer";
-import { incMetric } from "@/lib/metrics-counters";
+import {
+  incMetric,
+  incSseActiveConnection,
+  recordSseConnectionDuration,
+} from "@/lib/metrics-counters";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +47,7 @@ export const GET = withMetrics("GET /api/events", async function GET(request: Re
   let closed = false;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let source: ReturnType<typeof createLiveEventSource> | null = null;
+  const startTime = Date.now();
 
   // Release the connection exactly once — from the client abort, an overflow
   // disconnect, or a stream cancel.
@@ -52,9 +57,13 @@ export const GET = withMetrics("GET /api/events", async function GET(request: Re
     if (heartbeat) clearInterval(heartbeat);
     if (source) source.stop();
     // Release the connection from the `ophirpay_sse_open_connections` gauge
-    // (visible on /api/metrics) so operators and the SSE load test can verify
-    // connections are released when clients disconnect.
+    // and route-specific gauge, and record session duration into histogram.
     incMetric("sse_open_connections", -1);
+    incSseActiveConnection("events", -1);
+    recordSseConnectionDuration(
+      "events",
+      Math.max(0, (Date.now() - startTime) / 1000)
+    );
   };
 
   let lastDropped = 0;
@@ -77,8 +86,9 @@ export const GET = withMetrics("GET /api/events", async function GET(request: Re
       buffer.attach(controller);
 
       // Track the open connection on the `ophirpay_sse_open_connections`
-      // gauge (visible on /api/metrics).
+      // and `ophirpay_sse_active_connections{route="events"}` gauges.
       incMetric("sse_open_connections");
+      incSseActiveConnection("events", 1);
 
       // Heartbeat every 15s to keep the connection alive through proxies.
       heartbeat = setInterval(() => {
