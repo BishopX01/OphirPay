@@ -349,6 +349,16 @@ export const API_OPERATIONS = [
     "requestBody": false
   },
   {
+    "name": "getApiOpenapiJson",
+    "method": "GET",
+    "path": "/api/openapi.json",
+    "summary": "OpenAPI specification in JSON format",
+    "tags": [
+      "Documentation"
+    ],
+    "requestBody": false
+  },
+  {
     "name": "getApiPauseState",
     "method": "GET",
     "path": "/api/pause-state",

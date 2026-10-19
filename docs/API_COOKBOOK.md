@@ -113,6 +113,7 @@ Complete list of every endpoint declared in [`docs/openapi.yaml`](openapi.yaml).
 | `/api/cron` | GET, POST |
 | `/api/jobs/process-due-recurring` | POST |
 | `/api/pause-state` | GET |
+| `/api/openapi.json` | GET |
 
 ---
 
@@ -892,3 +893,28 @@ curl -X POST https://api.ophirpay.com/api/csp-report \
     }
   }]'
 ```
+
+---
+
+## 13. OpenAPI Specification
+
+### Fetch OpenAPI Specification (`/api/openapi.json`)
+
+Fetch the machine-readable OpenAPI 3.1.0 JSON document for client generation, API testing, or tooling integration:
+
+```bash
+curl "https://api.ophirpay.com/api/openapi.json"
+```
+
+**Response (`200 OK` - Application/JSON):**
+```json
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OphirPay API",
+    "version": "0.1.0"
+  },
+  "paths": { ... }
+}
+```
+
