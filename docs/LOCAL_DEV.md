@@ -182,19 +182,29 @@ npm run dev
 
 ## 4. What the seed script does
 
-`npm run db:seed` runs `prisma/seed.ts` via `tsx`. It creates:
+OphirPay supports structured seed profiles via `prisma/seed.ts` and automated execution via `scripts/staging-seed.sh`:
 
-| Data | Details |
-|---|---|
-| **1 demo user** | `seed-user-1` — "OphirPay Demo", Stellar address `GACZ7ZEL…QM2U` (upserted — safe to re-run) |
-| **5 payments** | 3 `COMPLETED`, 1 `PENDING`, 1 `FAILED` — with amounts, descriptions, and a placeholder `transactionHash` |
-| **1 batch** | "Demo Batch — Monthly Payroll" (`COMPLETED`) |
-| **4 refunds** | Linked to the seeded payments, with realistic `reason`/`reasonCode`/`status` values |
-| **3 notification hooks** | `payment_recorded`, `refund_processed`, `escrow_created` → `https://example.com/webhooks/...` |
+### 4.1 Seed Profiles
 
-**Idempotency caveat:** the demo user is upserted, but payments/batches/refunds/
-hooks are plain `create` calls — **re-running the seed adds duplicate rows**. To
-start clean:
+| Profile | Command | Data Generated | Target Environment |
+|---|---|---|---|
+| **`minimal`** (default) | `npm run db:seed:minimal` | 1 demo user, 5 payments, 1 batch, 4 refunds, 3 hooks | Local quick development |
+| **`staging`** | `npm run db:seed:staging` or `./scripts/staging-seed.sh` | 4 persona users (Merchant, Buyer, Approver, Auditor), 12 payments with 30-day history, 3 batches, recurrences, scheduled payments, payment links, 4 refunds, webhook + delivery events, 4 audit logs, sanitized API key | Staging & E2E integration testing |
+| **`load`** | `npm run db:seed:load` | 1 user, 5 batches, 75 synthetic payments across XLM/USDC | Performance & query load testing |
+
+### 4.2 Staging Seed Script & Safety Guards
+
+For staging environments, `./scripts/staging-seed.sh` automates schema synchronization and comprehensive multi-user test data provisioning:
+
+```bash
+./scripts/staging-seed.sh
+```
+
+**Production Safety Check:** Both `prisma/seed.ts` and `scripts/staging-seed.sh` inspect `DATABASE_URL` before execution. Seeding will immediately halt if the target URL contains production domain patterns (e.g., AWS RDS, Supabase, Neon production branches) or keywords (`prod`, `production`, `mainnet`, `live`) unless explicitly flagged as staging, test, or local.
+
+**Data Sanitization:** All seeded emails use `@staging.ophirpay.example.com` or `@example.com`. No real user emails, live private keys, or sensitive API secrets are ever seeded into the database.
+
+**Idempotency caveat:** Demo users are upserted, but transaction records are appended. To start completely clean:
 
 ```bash
 # SQLite: delete the dev database file and re-push
@@ -203,9 +213,9 @@ npx prisma db push && npm run db:seed
 
 # Neon / PostgreSQL: truncate the tables (or use a fresh branch)
 npx prisma db execute --stdin <<'SQL'
-TRUNCATE "Payment", "Batch", "Refund", "NotificationHook", "User" CASCADE;
+TRUNCATE "Payment", "Batch", "Refund", "NotificationHook", "User", "AuditLog", "ApiKey" CASCADE;
 SQL
-npm run db:seed
+npm run db:seed:staging
 ```
 
 ---
