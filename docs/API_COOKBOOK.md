@@ -84,6 +84,7 @@ Complete list of every endpoint declared in [`docs/openapi.yaml`](openapi.yaml).
 | `/api/webhooks/{id}/replay` | POST |
 | `/api/webhooks/{id}/deliveries` | GET |
 | `/api/webhooks/{id}/deliveries/{deliveryId}/redeliver` | POST |
+| `/api/webhooks/{id}/deliveries/requeue` | POST |
 | `/api/keys` | GET, POST, PATCH, DELETE |
 | `/api/keys/stats` | GET |
 | `/api/keys/{id}/rotate` | POST |
@@ -560,6 +561,25 @@ curl -X POST "https://api.ophirpay.com/api/webhooks" \
   "events": ["payment.completed", "payment.failed", "escrow.released"],
   "active": true,
   "createdAt": "2026-08-26T18:55:00.000Z"
+}
+```
+
+### Requeue Dead-Lettered Webhook Deliveries
+```bash
+curl -X POST "https://api.ophirpay.com/api/webhooks/{id}/deliveries/requeue" \
+  -H "Authorization: Bearer ophir_live_sk_8f7b2c9e4a1d0f62b8e3c1a9" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "statusCodes": [500, 502, 504],
+    "olderThanMs": 60000
+  }'
+```
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "requeuedCount": 3,
+  "webhookId": "wh_019a99824c"
 }
 ```
 

@@ -107,6 +107,7 @@ export type ApiOperationName =
   | "postApiStreams"
   | "postApiWebhooks"
   | "postApiWebhooksIdDeliveriesDeliveryIdRedeliver"
+  | "postApiWebhooksIdDeliveriesRequeue"
   | "postApiWebhooksIdReplay"
   | "postApiWebhooksIdTest";
 

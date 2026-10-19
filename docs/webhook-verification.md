@@ -393,8 +393,36 @@ publicly when you register it but privately later, that attempt is refused.
 
 ---
 
+## Dead-Letter Queue (DLQ) & Administrative Requeue
+
+When deliveries fail across all retry attempts, they transition to `DEAD_LETTER` (or `FAILED`). Once an outage at the receiver's endpoint is remediated, administrators can query and selectively bulk-requeue dead-lettered events:
+
+### Querying Deliveries
+Filter deliveries by delivery status (`DEAD_LETTER`, `FAILED`, `PENDING`, `SUCCESS`) or HTTP response status code:
+```bash
+GET /api/webhooks/{webhookId}/deliveries?status=DEAD_LETTER&statusCode=500&limit=20
+```
+
+### Requeuing Deliveries
+Bulk-requeue dead-lettered events matching specific status codes, timeouts, or explicit delivery IDs:
+```bash
+POST /api/webhooks/{webhookId}/deliveries/requeue
+Content-Type: application/json
+
+{
+  "statusCodes": [500, 502, 504],
+  "onlyTimeouts": true,
+  "limit": 50
+}
+```
+
+Requeued deliveries preserve their original event timestamp, data payload, and correlation identifiers while resetting `attempts` to `0` and transitioning status to `PENDING` for the background delivery worker.
+
+---
+
 ## Related docs
 
 - [Integration guide](integration-guide.md) — end-to-end setup
 - [Architecture](architecture.md) — where webhooks fit in the system
 - `src/lib/webhook-deliver.ts` — sender-side signing (`buildSignedPayload`)
+
