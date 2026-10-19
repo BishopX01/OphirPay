@@ -993,3 +993,86 @@ fn test_escrow_and_stream_automatic_ttl_extension_on_read_and_claim() {
     assert_eq!(fix.client.get_escrow(&escrow_id).released, true);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Stream Duration Bounds Enforcement (#1350)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_create_stream_duration_too_short_fails() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 100_000);
+
+    let now = fix.env.ledger().timestamp();
+    // 59 seconds duration (< MIN_STREAM_DURATION = 60s) fails with StreamDurationTooShort
+    let res = fix.client.try_create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + 59),
+        &String::from_str(&fix.env, "meta_short"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::StreamDurationTooShort)));
+}
+
+#[test]
+fn test_create_stream_duration_too_long_fails() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 100_000);
+
+    let now = fix.env.ledger().timestamp();
+    let five_years = 5 * 365 * 86_400;
+    // 5 years + 1 second (> MAX_STREAM_DURATION) fails with StreamDurationTooLong
+    let res = fix.client.try_create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + five_years + 1),
+        &String::from_str(&fix.env, "meta_long"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::StreamDurationTooLong)));
+}
+
+#[test]
+fn test_create_stream_valid_boundaries_succeed() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 200_000);
+
+    let now = fix.env.ledger().timestamp();
+    let five_years = 5 * 365 * 86_400;
+
+    // Boundary 1: Exactly 60 seconds (MIN_STREAM_DURATION) succeeds
+    let min_stream_id = fix.client.create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + 60),
+        &String::from_str(&fix.env, "meta_min"),
+    );
+    assert_eq!(min_stream_id, 1);
+
+    // Boundary 2: Exactly 5 years (MAX_STREAM_DURATION) succeeds
+    let max_stream_id = fix.client.create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + five_years),
+        &String::from_str(&fix.env, "meta_max"),
+    );
+    assert_eq!(max_stream_id, 2);
+}
+
+
