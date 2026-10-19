@@ -394,4 +394,15 @@ pub const DEFAULT_STELLAR_DECIMALS: u32 = 7;
 /// Maximum allowable decimal precision for custom tokens (0 to 18 decimals) (#1347).
 pub const MAX_TOKEN_DECIMALS: u32 = 18;
 
+// ── Subsystem Capability Bitflags (#1358) ────────────────────
+pub const PAUSE_PAYMENTS: u32 = 1;
+pub const PAUSE_ESCROWS: u32 = 2;
+pub const PAUSE_STREAMS: u32 = 4;
+pub const PAUSE_GOVERNANCE: u32 = 8;
+pub const PAUSE_RECURRING: u32 = 16;
+pub const PAUSE_REFUNDS: u32 = 32;
+pub const PAUSE_HOOKS: u32 = 64;
+pub const PAUSE_BATCHES: u32 = 128;
+pub const PAUSE_ALL: u32 = 255;
+
 
