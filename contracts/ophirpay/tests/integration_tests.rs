@@ -935,3 +935,62 @@ fn test_unknown_pause_scope_is_rejected() {
     // Nothing was written for the unknown id.
     assert_eq!(fix.client.get_paused_scopes().len(), 0);
 }
+
+// ===========================================================================
+// MEMO TEXT BYTE-LENGTH LIMIT & CHARACTER VALIDATION (#1360)
+// ===========================================================================
+
+#[test]
+fn test_memo_validation_accepts_empty_64_byte_boundary_and_utf8() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    fix.mint(&payer, 100_000);
+
+    // Empty memo passes
+    let empty_str = String::from_str(&fix.env, "");
+    let id1 = fix.client.record_payment(&payer, &payee, &100i128, &fix.token_id, &empty_str, &empty_str);
+    assert_eq!(id1, 1);
+
+    // Exactly 64 bytes passes
+    let memo_64 = String::from_str(&fix.env, "1234567890123456789012345678901234567890123456789012345678901234");
+    assert_eq!(memo_64.len(), 64);
+    let id2 = fix.client.record_payment(&payer, &payee, &100i128, &fix.token_id, &memo_64, &empty_str);
+    assert_eq!(id2, 2);
+
+    // Valid UTF-8 string passes
+    let utf8_str = String::from_str(&fix.env, "OphirPay Payment \u{1F680}");
+    let id3 = fix.client.record_payment(&payer, &payee, &100i128, &fix.token_id, &utf8_str, &empty_str);
+    assert_eq!(id3, 3);
+}
+
+#[test]
+fn test_memo_validation_rejects_oversized_and_control_chars_in_record_payment_and_create_batch() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    fix.mint(&payer, 100_000);
+
+    // 65 bytes exceeds MAX_MEMO_BYTES (64)
+    let memo_65 = String::from_str(&fix.env, "12345678901234567890123456789012345678901234567890123456789012345");
+    assert_eq!(memo_65.len(), 65);
+    let empty = String::from_str(&fix.env, "");
+
+    let res_oversized = fix.client.try_record_payment(&payer, &payee, &100i128, &fix.token_id, &memo_65, &empty);
+    assert_eq!(res_oversized, Err(Ok(PaymentError::MemoTooLong)));
+
+    // Memo containing control character (e.g. ASCII 0x01)
+    let memo_ctrl = String::from_str(&fix.env, "bad\x01memo");
+    let res_ctrl = fix.client.try_record_payment(&payer, &payee, &100i128, &fix.token_id, &memo_ctrl, &empty);
+    assert_eq!(res_ctrl, Err(Ok(PaymentError::MemoTooLong)));
+
+    // create_batch rejects oversized tx_hash
+    let mut payees = Vec::new(&fix.env);
+    payees.push_back(payee.clone());
+    let mut amounts = Vec::new(&fix.env);
+    amounts.push_back(100i128);
+
+    let res_batch = fix.client.try_create_batch(&payer, &payees, &amounts, &fix.token_id, &memo_65);
+    assert!(matches!(res_batch, Err(Ok(PaymentError::MemoTooLong))));
+}
+

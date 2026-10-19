@@ -51,6 +51,30 @@ pub const BUMP_MAINTENANCE_TTL: u32 = 100_000;
 // `get_reason_code_analytics`.
 pub const MAX_READER_ENTRIES: u32 = 100;
 
+// ── Memo Text Limit (issue #1360) ─────────────────────────────
+/// Maximum byte length for memo/metadata strings across contract entrypoints (#1360).
+pub const MAX_MEMO_BYTES: u32 = 64;
+
+/// Validate memo/metadata text: length cannot exceed `MAX_MEMO_BYTES` (64 bytes)
+/// and must not contain ASCII control characters (< 0x20 except \t and \n) or DEL (0x7F).
+pub fn validate_memo_text(memo: &String) -> Result<(), PaymentError> {
+    let len = memo.len();
+    if len > MAX_MEMO_BYTES {
+        return Err(PaymentError::MemoTooLong);
+    }
+    if len > 0 {
+        let mut buf = [0u8; 64];
+        let slice = &mut buf[..len as usize];
+        memo.copy_into_slice(slice);
+        for &b in slice.iter() {
+            if (b < 0x20 && b != b'\t' && b != b'\n') || b == 0x7f {
+                return Err(PaymentError::MemoTooLong);
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Contract ───────────────────────────────────────────────────
 
 #[contract]
@@ -1104,6 +1128,8 @@ impl OphirPayContract {
     ) -> Result<u64, PaymentError> {
         payer.require_auth();
         require_not_paused(&env, PauseScope::Payments)?;
+        validate_memo_text(&tx_hash)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -2039,6 +2065,8 @@ impl OphirPayContract {
     ) -> Result<u64, PaymentError> {
         payer.require_auth();
         require_not_paused(&env, PauseScope::Payments)?;
+        validate_memo_text(&tx_hash)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -2203,6 +2231,7 @@ impl OphirPayContract {
         let _guard = acquire_reentrancy_lock(&env)?;
         depositor.require_auth();
         require_not_paused(&env, PauseScope::Escrows)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -2456,6 +2485,7 @@ impl OphirPayContract {
         let _guard = acquire_reentrancy_lock(&env)?;
         creator.require_auth();
         require_not_paused(&env, PauseScope::Streams)?;
+        validate_memo_text(&metadata)?;
         if total_amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -3339,6 +3369,7 @@ impl OphirPayContract {
     ) -> Result<BatchCreateResult, PaymentError> {
         creator.require_auth();
         require_not_paused(&env, PauseScope::Batches)?;
+        validate_memo_text(&tx_hash)?;
 
         let len = payees.len();
         if len == 0 {
