@@ -103,6 +103,32 @@ ophirpay_rpc_failover_fallback_duration_seconds 0.000
 # TYPE ophirpay_rpc_failover_longest_fallback_duration_seconds gauge
 ophirpay_rpc_failover_longest_fallback_duration_seconds 0.000
 
+# HELP ophirpay_rpc_request_duration_seconds Latency of Soroban RPC calls in seconds
+# TYPE ophirpay_rpc_request_duration_seconds histogram
+ophirpay_rpc_request_duration_seconds_bucket{le="0.005"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="0.01"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="0.025"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="0.05"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="0.1"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="0.25"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="0.5"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="1"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="2.5"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="5"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="10"} 0
+ophirpay_rpc_request_duration_seconds_bucket{le="+Inf"} 0
+ophirpay_rpc_request_duration_seconds_sum 0
+ophirpay_rpc_request_duration_seconds_count 0
+
+# HELP ophirpay_rpc_requests_total Total Soroban RPC requests served by status class
+# TYPE ophirpay_rpc_requests_total counter
+ophirpay_rpc_requests_total{status_class="2xx"} 0
+ophirpay_rpc_requests_total{status_class="5xx"} 0
+
+# HELP ophirpay_database_pool_wait_seconds Prisma database connection pool queue wait duration in seconds
+# TYPE ophirpay_database_pool_wait_seconds gauge
+ophirpay_database_pool_wait_seconds 0
+
 # HELP ophirpay_process_resident_set_bytes Process resident set size in bytes
 # TYPE ophirpay_process_resident_set_bytes gauge
 ophirpay_process_resident_set_bytes 0

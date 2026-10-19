@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   getMetricsSnapshot,
   getEndpointMetrics,
+  getRpcMetricsSnapshot,
   recordRpcFailoverState,
   LATENCY_BUCKET_BOUNDS,
 } from "@/lib/metrics-counters";
@@ -234,6 +235,34 @@ export async function buildMetrics(): Promise<string> {
     "# HELP ophirpay_rpc_failover_longest_fallback_duration_seconds Longest fallback episode observed since process start",
     "# TYPE ophirpay_rpc_failover_longest_fallback_duration_seconds gauge",
     `ophirpay_rpc_failover_longest_fallback_duration_seconds ${(failover.longestFallbackDurationMs / 1000).toFixed(3)}`
+  );
+
+  // ── Soroban RPC performance & requests (issue #1412) ────────
+  const rpcMetrics = getRpcMetricsSnapshot();
+  lines.push(
+    "",
+    "# HELP ophirpay_rpc_request_duration_seconds Latency of Soroban RPC calls in seconds",
+    "# TYPE ophirpay_rpc_request_duration_seconds histogram"
+  );
+  for (let i = 0; i < LATENCY_BUCKET_BOUNDS.length; i++) {
+    const le = LATENCY_BUCKET_BOUNDS[i];
+    lines.push(
+      `ophirpay_rpc_request_duration_seconds_bucket{le="${le}"} ${rpcMetrics.buckets[i]}`
+    );
+  }
+  lines.push(
+    `ophirpay_rpc_request_duration_seconds_bucket{le="+Inf"} ${rpcMetrics.buckets[LATENCY_BUCKET_BOUNDS.length]}`,
+    `ophirpay_rpc_request_duration_seconds_sum ${rpcMetrics.latencySum}`,
+    `ophirpay_rpc_request_duration_seconds_count ${rpcMetrics.latencyCount}`,
+    "",
+    "# HELP ophirpay_rpc_requests_total Total Soroban RPC requests served by status class",
+    "# TYPE ophirpay_rpc_requests_total counter",
+    `ophirpay_rpc_requests_total{status_class="2xx"} ${rpcMetrics.requestsTotal["2xx"]}`,
+    `ophirpay_rpc_requests_total{status_class="5xx"} ${rpcMetrics.requestsTotal["5xx"]}`,
+    "",
+    "# HELP ophirpay_database_pool_wait_seconds Prisma database connection pool queue wait duration in seconds",
+    "# TYPE ophirpay_database_pool_wait_seconds gauge",
+    `ophirpay_database_pool_wait_seconds ${c.database_pool_wait_seconds}`
   );
 
   // ── Live gauges: process memory + open SSE connections ──────
