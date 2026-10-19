@@ -90,6 +90,6 @@ ENV PORT=3000
 # Uses lightweight native Node.js probe script (scripts/healthcheck.js).
 # Probes the liveness endpoint (/api/health/live) by default, ensuring the Node
 # process is responsive without coupling container status to external dependencies.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["node", "scripts/healthcheck.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["node", "scripts/healthcheck.js", "/api/health/live"]
 
 CMD ["server.js"]

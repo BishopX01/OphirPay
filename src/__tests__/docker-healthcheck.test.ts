@@ -21,7 +21,7 @@ const healthcheckScriptPath = join(repoRoot, "scripts", "healthcheck.js");
 
 function runHealthcheck(
   args: string[] = [],
-  env: NodeJS.ProcessEnv = {}
+  env: Record<string, string | undefined> = {}
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [healthcheckScriptPath, ...args], {
@@ -164,7 +164,7 @@ describe("Docker Container Healthcheck (issue #1424)", () => {
       expect(dockerfile).toMatch(/--timeout=5s/);
       expect(dockerfile).toMatch(/--start-period=15s/);
       expect(dockerfile).toMatch(/--retries=3/);
-      expect(dockerfile).toMatch(/CMD\s+\["node",\s*"scripts\/healthcheck\.js"\]/);
+      expect(dockerfile).toMatch(/CMD\s+\["node",\s*"scripts\/healthcheck\.js",\s*"\/api\/health\/live"\]/);
     });
   });
 
@@ -176,10 +176,10 @@ describe("Docker Container Healthcheck (issue #1424)", () => {
     it("defines matching healthcheck for the app container", () => {
       const hc = compose.services.app.healthcheck;
       expect(hc).toBeDefined();
-      expect(hc.test).toEqual(["CMD", "node", "scripts/healthcheck.js"]);
+      expect(hc.test).toEqual(["CMD", "node", "scripts/healthcheck.js", "/api/health/live"]);
       expect(hc.interval).toBe("30s");
       expect(hc.timeout).toBe("5s");
-      expect(hc.start_period).toBe("15s");
+      expect(hc.start_period).toBe("20s");
       expect(hc.retries).toBe(3);
     });
   });

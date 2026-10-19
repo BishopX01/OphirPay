@@ -18,7 +18,8 @@ const http = require("node:http");
 const isDeep = process.argv.includes("--deep");
 const host = process.env.HEALTHCHECK_HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
-const defaultEndpoint = isDeep ? "/api/health" : "/api/health/live";
+const endpointArg = process.argv.slice(2).find((arg) => arg.startsWith("/"));
+const defaultEndpoint = endpointArg || (isDeep ? "/api/health" : "/api/health/live");
 const path = process.env.HEALTHCHECK_ENDPOINT || defaultEndpoint;
 const timeoutMs = Number(process.env.HEALTHCHECK_TIMEOUT_MS || 4000);
 
