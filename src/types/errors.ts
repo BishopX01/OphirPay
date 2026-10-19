@@ -319,6 +319,10 @@ export enum PaymentError {
   StreamDurationTooShort = 310,
   StreamDurationTooLong = 311,
   InvalidDecimalPrecision = 312,
+  MemoTooLong = 313,
+  InvalidThreshold = 314,
+  EmptySignersList = 315,
+  DisputeCoolingOffActive = 316,
 }
 
 export const PAYMENT_ERROR_NAMES: Record<number, string> = {
@@ -634,6 +638,10 @@ export const PAYMENT_ERROR_NAMES: Record<number, string> = {
   310: "StreamDurationTooShort",
   311: "StreamDurationTooLong",
   312: "InvalidDecimalPrecision",
+  313: "MemoTooLong",
+  314: "InvalidThreshold",
+  315: "EmptySignersList",
+  316: "DisputeCoolingOffActive",
 };
 
 export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
@@ -949,6 +957,10 @@ export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
   "StreamDurationTooShort": 310,
   "StreamDurationTooLong": 311,
   "InvalidDecimalPrecision": 312,
+  "MemoTooLong": 313,
+  "InvalidThreshold": 314,
+  "EmptySignersList": 315,
+  "DisputeCoolingOffActive": 316,
 };
 
 export const ERROR_MESSAGES: Record<number, string> = {
@@ -1264,4 +1276,8 @@ export const ERROR_MESSAGES: Record<number, string> = {
   310: "Stream duration is too short: minimum duration is 60 seconds",
   311: "Stream duration is too long: maximum duration is 5 years",
   312: "Payment amount violates token decimal precision constraints",
+  313: "Payment memo exceeds maximum length or contains invalid control characters",
+  314: "Threshold cannot be zero or exceed signer count",
+  315: "Signers list cannot be empty",
+  316: "Dispute cooling-off period is still active",
 };

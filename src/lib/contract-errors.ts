@@ -321,6 +321,10 @@ export const CONTRACT_ERROR_MAP: Record<string, string> = {
   "310": "Stream duration is too short: minimum duration is 60 seconds",
   "311": "Stream duration is too long: maximum duration is 5 years",
   "312": "Payment amount violates token decimal precision constraints",
+  "313": "Payment memo exceeds maximum length or contains invalid control characters",
+  "314": "Threshold cannot be zero or exceed signer count",
+  "315": "Signers list cannot be empty",
+  "316": "Dispute cooling-off period is still active",
 };
 
 /**

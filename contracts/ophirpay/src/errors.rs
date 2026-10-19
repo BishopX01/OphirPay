@@ -668,5 +668,17 @@ pub enum PaymentError {
     // ── Token Decimal Precision (312) ───────────────────────────
     /// Payment amount violates token decimal precision constraints
     InvalidDecimalPrecision = 312,
+    // ── Payment Memo Validation (313) ───────────────────────────
+    /// Payment memo exceeds maximum length or contains invalid control characters
+    MemoTooLong = 313,
+    // ── Multisig Configuration Guards (314-315) ─────────────────
+    /// Threshold cannot be zero or exceed signer count
+    InvalidThreshold = 314,
+    /// Signers list cannot be empty
+    EmptySignersList = 315,
+    // ── Dispute Resolution Guards (316) ─────────────────────────
+    /// Dispute cooling-off period is still active
+    DisputeCoolingOffActive = 316,
 }
+
 
