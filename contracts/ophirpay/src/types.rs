@@ -379,14 +379,16 @@ pub struct HookList {
     pub truncated: bool,
 }
 
-// ── Subsystem Capability Bitflags (#1358) ────────────────────
-pub const PAUSE_PAYMENTS: u32 = 1;
-pub const PAUSE_ESCROWS: u32 = 2;
-pub const PAUSE_STREAMS: u32 = 4;
-pub const PAUSE_GOVERNANCE: u32 = 8;
-pub const PAUSE_RECURRING: u32 = 16;
-pub const PAUSE_REFUNDS: u32 = 32;
-pub const PAUSE_HOOKS: u32 = 64;
-pub const PAUSE_BATCHES: u32 = 128;
-pub const PAUSE_ALL: u32 = 255;
+/// Minimum duration for a payment stream (60 seconds / 1 minute) (#1350).
+pub const MIN_STREAM_DURATION: u64 = 60;
+
+/// Maximum duration for a payment stream (5 years in seconds: 157,680,000s) (#1350).
+pub const MAX_STREAM_DURATION: u64 = 5 * 365 * 86_400;
+
+/// Default decimal places for Stellar classic and standard tokens (XLM, USDC on Stellar have 7 decimals) (#1347).
+pub const DEFAULT_STELLAR_DECIMALS: u32 = 7;
+
+/// Maximum allowable decimal precision for custom tokens (0 to 18 decimals) (#1347).
+pub const MAX_TOKEN_DECIMALS: u32 = 18;
+
 

@@ -316,7 +316,9 @@ export enum PaymentError {
   StreamInvariantViolated = 307,
   InvalidPauseScope = 308,
   PaymentIdempotencyConflict = 309,
-  MemoTooLong = 310,
+  StreamDurationTooShort = 310,
+  StreamDurationTooLong = 311,
+  InvalidDecimalPrecision = 312,
 }
 
 export const PAYMENT_ERROR_NAMES: Record<number, string> = {
@@ -629,7 +631,9 @@ export const PAYMENT_ERROR_NAMES: Record<number, string> = {
   307: "StreamInvariantViolated",
   308: "InvalidPauseScope",
   309: "PaymentIdempotencyConflict",
-  310: "MemoTooLong",
+  310: "StreamDurationTooShort",
+  311: "StreamDurationTooLong",
+  312: "InvalidDecimalPrecision",
 };
 
 export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
@@ -942,7 +946,9 @@ export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
   "StreamInvariantViolated": 307,
   "InvalidPauseScope": 308,
   "PaymentIdempotencyConflict": 309,
-  "MemoTooLong": 310,
+  "StreamDurationTooShort": 310,
+  "StreamDurationTooLong": 311,
+  "InvalidDecimalPrecision": 312,
 };
 
 export const ERROR_MESSAGES: Record<number, string> = {
@@ -1255,5 +1261,7 @@ export const ERROR_MESSAGES: Record<number, string> = {
   307: "Stream accounting invariant violated: refused to pay an inconsistent amount",
   308: "Pause scope not recognized: unknown scope identifier",
   309: "Idempotency key was reused for a different payment payload",
-  310: "Memo exceeds maximum byte length (64 bytes) or contains invalid characters",
+  310: "Stream duration is too short: minimum duration is 60 seconds",
+  311: "Stream duration is too long: maximum duration is 5 years",
+  312: "Payment amount violates token decimal precision constraints",
 };

@@ -456,6 +456,9 @@ impl OphirPayContract {
         if payment_fee_bps > 1000 || escrow_fee_bps > 1000 || stream_fee_bps > 1000 {
             return Err(PaymentError::FeeTooHigh);
         }
+        let prev_config: Option<FeeConfig> = env.storage().instance().get(&FEE_KEY);
+        let current_collector: Option<Address> = env.storage().instance().get(&FEE_COLL);
+
         let config = FeeConfig {
             payment_fee_bps,
             escrow_fee_bps,
@@ -491,6 +494,23 @@ impl OphirPayContract {
             &caller,
             0,
             "Fee configuration updated",
+        );
+
+        emit_fee_config_updated(
+            &env,
+            &FeeConfigUpdated {
+                previous_collector: current_collector.clone(),
+                new_collector: current_collector,
+                previous_payment_fee_bps: prev_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
+                new_payment_fee_bps: payment_fee_bps,
+                previous_escrow_fee_bps: prev_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
+                new_escrow_fee_bps: escrow_fee_bps,
+                previous_stream_fee_bps: prev_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
+                new_stream_fee_bps: stream_fee_bps,
+                enabled,
+                updated_by: caller.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
         );
 
         Ok(())
@@ -529,14 +549,110 @@ impl OphirPayContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_owner(&env, &caller)?;
+        let prev_collector: Option<Address> = env.storage().instance().get(&FEE_COLL);
+        let current_config: Option<FeeConfig> = env.storage().instance().get(&FEE_KEY);
+
         env.storage().instance().set(&FEE_COLL, &collector);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+        record_audit(
+            &env,
+            "fee_collector_set",
+            &caller,
+            0,
+            "Fee collector updated",
+        );
+
+        emit_fee_config_updated(
+            &env,
+            &FeeConfigUpdated {
+                previous_collector: prev_collector,
+                new_collector: Some(collector),
+                previous_payment_fee_bps: current_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
+                new_payment_fee_bps: current_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
+                previous_escrow_fee_bps: current_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
+                new_escrow_fee_bps: current_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
+                previous_stream_fee_bps: current_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
+                new_stream_fee_bps: current_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
+                enabled: current_config.as_ref().map(|c| c.enabled).unwrap_or(false),
+                updated_by: caller.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
         Ok(())
     }
 
     /// Get the fee collector address.
     pub fn get_fee_collector(env: Env) -> Option<Address> {
         env.storage().instance().get(&FEE_COLL)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  TOKEN DECIMAL PRECISION CONFIGURATION (#1347)
+    // ═══════════════════════════════════════════════════════════
+
+    /// Configure allowable decimal precision for a specific token asset (owner only).
+    pub fn set_token_decimals(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        decimals: u32,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        env.storage()
+            .persistent()
+            .set(&(TOKEN_DEC_KEY, asset.clone()), &decimals);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(TOKEN_DEC_KEY, asset), BUMP_MIN_TTL, BUMP_MAX_TTL);
+        Ok(())
+    }
+
+    /// Query configured decimal places for a token asset (defaults to 7 for Stellar standard).
+    pub fn get_token_decimals(env: Env, asset: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&(TOKEN_DEC_KEY, asset))
+            .unwrap_or(DEFAULT_STELLAR_DECIMALS)
+    }
+
+    /// Calculate minimum quantum step in stroops for given decimal precision.
+    pub fn token_quantum_step(decimals: u32) -> Result<i128, PaymentError> {
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        if decimals < DEFAULT_STELLAR_DECIMALS {
+            let exp = DEFAULT_STELLAR_DECIMALS - decimals;
+            let mut step: i128 = 1;
+            for _ in 0..exp {
+                step = step.saturating_mul(10);
+            }
+            Ok(step)
+        } else {
+            Ok(1)
+        }
+    }
+
+    /// Validate that an amount complies with the token asset's decimal precision.
+    pub fn validate_token_decimal_precision(
+        env: &Env,
+        asset: &Address,
+        amount: i128,
+    ) -> Result<(), PaymentError> {
+        let decimals: u32 = env
+            .storage()
+            .persistent()
+            .get(&(TOKEN_DEC_KEY, asset.clone()))
+            .unwrap_or(DEFAULT_STELLAR_DECIMALS);
+        let step = Self::token_quantum_step(decimals)?;
+        if step > 1 && amount % step != 0 {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        Ok(())
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -2114,6 +2230,7 @@ impl OphirPayContract {
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
+        Self::validate_token_decimal_precision(&env, &asset, amount)?;
 
         // Idempotency (#804): (payer, tx_hash) identifies a payment. Replaying
         // the same call returns the original id; replaying it with a different
@@ -2307,6 +2424,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, count), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, count));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, count), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2365,6 +2483,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, escrow_id), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2427,6 +2546,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, escrow_id), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2481,6 +2601,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, escrow_id), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2500,10 +2621,12 @@ impl OphirPayContract {
 
     /// Get escrow by ID
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<Escrow, PaymentError> {
-        env.storage()
+        let escrow: Escrow = env.storage()
             .persistent()
             .get(&(ESCROW_KEY, escrow_id))
-            .ok_or(PaymentError::EscrowNotFound)
+            .ok_or(PaymentError::EscrowNotFound)?;
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
+        Ok(escrow)
     }
 
     /// Get escrow count
@@ -2536,6 +2659,13 @@ impl OphirPayContract {
         if end_time <= start_time {
             return Err(PaymentError::InvalidAmount);
         }
+        let duration = end_time - start_time;
+        if duration < MIN_STREAM_DURATION {
+            return Err(PaymentError::StreamDurationTooShort);
+        }
+        if duration > MAX_STREAM_DURATION {
+            return Err(PaymentError::StreamDurationTooLong);
+        }
 
         // Transfer total amount from creator to contract (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &asset);
@@ -2564,6 +2694,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(STREAM_KEY, count), &stream);
+        touch_record_ttl(&env, &(STREAM_KEY, count));
         env.storage()
             .persistent()
             .extend_ttl(&(STREAM_KEY, count), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2644,6 +2775,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(STREAM_KEY, stream_id), &stream);
+        touch_record_ttl(&env, &(STREAM_KEY, stream_id));
         env.storage()
             .persistent()
             .extend_ttl(&(STREAM_KEY, stream_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2693,6 +2825,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(STREAM_KEY, stream_id), &stream);
+        touch_record_ttl(&env, &(STREAM_KEY, stream_id));
         env.storage()
             .persistent()
             .extend_ttl(&(STREAM_KEY, stream_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2723,10 +2856,12 @@ impl OphirPayContract {
 
     /// Get a stream by ID
     pub fn get_stream(env: Env, stream_id: u64) -> Result<Stream, PaymentError> {
-        env.storage()
+        let stream: Stream = env.storage()
             .persistent()
             .get(&(STREAM_KEY, stream_id))
-            .ok_or(PaymentError::StreamNotFound)
+            .ok_or(PaymentError::StreamNotFound)?;
+        touch_record_ttl(&env, &(STREAM_KEY, stream_id));
+        Ok(stream)
     }
 
     /// Get stream count

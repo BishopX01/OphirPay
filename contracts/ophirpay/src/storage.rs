@@ -53,6 +53,7 @@ pub const FEE_VER_CNT: Symbol = symbol_short!("FE_VER");
 pub const MSIG_VER_CNT: Symbol = symbol_short!("MS_VER");
 pub const PENDING_OWNER: Symbol = symbol_short!("PND_OWN");
 pub const OWNER_PROPOSED_AT: Symbol = symbol_short!("OWN_PAT");
+pub const TOKEN_DEC_KEY: Symbol = symbol_short!("TOK_DEC");
 
 // ── Per-counter storage keys (replaces ContractStats monolith) ─
 // Gas-optimized: each counter is a single u64/i128 instance key.
@@ -78,6 +79,26 @@ pub const STAT_AMT_BATCHED: Symbol = symbol_short!("S_AB");
 pub const LOCKED_BALANCE: Symbol = symbol_short!("LOCKED");
 pub const REENTRANCY_LOCK: Symbol = symbol_short!("RE_LOCK");
 
-/// Subsystem capability pause bitflags storage key (#1358)
-pub const PAUSE_FLAGS: Symbol = symbol_short!("PAUS_FLG");
-
+/// Automatic TTL extension threshold (`10_000` ledgers, ~14 hours at 5s/ledger)
+/// for active escrow and stream persistent records (#1352).
+pub const TTL_THRESHOLD: u32 = 10_000;
+
+/// Target TTL extension ceiling (`50_000` ledgers, ~2.9 days at 5s/ledger) applied when an
+/// active escrow or stream record is created, read, claimed, or updated (#1352).
+pub const TTL_EXTEND_TO: u32 = 50_000;
+
+/// Automatically extend the persistent storage TTL of an active escrow or
+/// stream record using `TTL_THRESHOLD` (`10_000`) and `TTL_EXTEND_TO` (`50_000`),
+/// and bump instance storage TTL so contract metadata stays live alongside the record.
+pub fn touch_record_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {
+    if env.storage().persistent().has(key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND_TO);
+    }
+}
+
+

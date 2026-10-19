@@ -40,6 +40,30 @@ pub fn emit_stream_event(env: &Env, creator: &Address, recipient: &Address, amou
     );
 }
 
+/// Event emitted when fee configuration or collector address is updated (#1349).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FeeConfigUpdated {
+    pub previous_collector: Option<Address>,
+    pub new_collector: Option<Address>,
+    pub previous_payment_fee_bps: u32,
+    pub new_payment_fee_bps: u32,
+    pub previous_escrow_fee_bps: u32,
+    pub new_escrow_fee_bps: u32,
+    pub previous_stream_fee_bps: u32,
+    pub new_stream_fee_bps: u32,
+    pub enabled: bool,
+    pub updated_by: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_fee_config_updated(env: &Env, event: &FeeConfigUpdated) {
+    env.events().publish(
+        (Symbol::new(env, "fee_config"), Symbol::new(env, "updated")),
+        event.clone(),
+    );
+}
+
 /// Increment a u64 counter key by 1. Gas-optimized: single-key read+write
 /// instead of deserializing/serializing an 11-field ContractStats struct.
 /// Note: does NOT extend TTL — callers should batch TTL extensions at the end
