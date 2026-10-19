@@ -935,3 +935,40 @@ fn test_unknown_pause_scope_is_rejected() {
     // Nothing was written for the unknown id.
     assert_eq!(fix.client.get_paused_scopes().len(), 0);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MULTISIG THRESHOLD AND SIGNERS VALIDATION (#1355)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_multisig_config_threshold_and_empty_signers_validation() {
+    let fix = TestFixture::new();
+    let signer1 = Address::generate(&fix.env);
+    let signer2 = Address::generate(&fix.env);
+
+    let empty_signers = Vec::new(&fix.env);
+    let mut signers = Vec::new(&fix.env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+
+    // 1. Empty signers list is rejected with EmptySignersList
+    let res_empty = fix.client.try_set_multisig_config(&fix.owner, &1u32, &empty_signers, &true);
+    assert_eq!(res_empty, Err(Ok(PaymentError::EmptySignersList)));
+
+    // 2. Threshold of 0 is rejected with InvalidThreshold
+    let res_zero = fix.client.try_set_multisig_config(&fix.owner, &0u32, &signers, &true);
+    assert_eq!(res_zero, Err(Ok(PaymentError::InvalidThreshold)));
+
+    // 3. Threshold exceeding signer count is rejected with InvalidThreshold
+    let res_overflow = fix.client.try_set_multisig_config(&fix.owner, &3u32, &signers, &true);
+    assert_eq!(res_overflow, Err(Ok(PaymentError::InvalidThreshold)));
+
+    // 4. Valid threshold and signers succeed
+    let res_valid = fix.client.try_set_multisig_config(&fix.owner, &2u32, &signers, &true);
+    assert!(res_valid.is_ok());
+
+    let cfg = fix.client.get_multisig_config().unwrap();
+    assert_eq!(cfg.threshold, 2);
+    assert_eq!(cfg.signers.len(), 2);
+    assert!(cfg.enabled);
+}

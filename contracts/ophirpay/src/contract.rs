@@ -146,12 +146,16 @@ impl OphirPayContract {
             }
         }
 
+        if unique_signers.is_empty() {
+            return Err(PaymentError::EmptySignersList);
+        }
+
         if unique_signers.len() > 50 {
             return Err(PaymentError::MaxSignersExceeded);
         }
 
         if threshold == 0 || threshold > unique_signers.len() {
-            return Err(PaymentError::InvalidAmount);
+            return Err(PaymentError::InvalidThreshold);
         }
 
         let config = MultisigConfig {
@@ -3500,4 +3504,4 @@ impl OphirPayContract {
         }
     }
 }
-
+
