@@ -2245,6 +2245,7 @@ impl OphirPayContract {
             released: false,
             claimed: false,
             metadata,
+            dispute_initiated_at: 0,
         };
 
         env.storage()
@@ -2353,6 +2354,15 @@ impl OphirPayContract {
             return Err(PaymentError::EscrowAlreadyReleased);
         }
 
+        // If dispute has been initiated, enforce cooling-off window
+        if escrow.dispute_initiated_at > 0 {
+            let min_period = Self::get_min_dispute_period(env.clone());
+            let now = env.ledger().timestamp();
+            if now < escrow.dispute_initiated_at.saturating_add(min_period) {
+                return Err(PaymentError::DisputeCoolingOffActive);
+            }
+        }
+
         let recipient = if release_to_beneficiary {
             escrow.beneficiary.clone()
         } else {
@@ -2452,6 +2462,151 @@ impl OphirPayContract {
     /// Get escrow count
     pub fn get_escrow_count(env: Env) -> u64 {
         env.storage().instance().get(&ESCROW_COUNT).unwrap_or(0)
+    }
+
+    /// Either depositor or beneficiary can initiate a dispute on an escrow with an arbiter.
+    pub fn initiate_dispute(env: Env, caller: Address, escrow_id: u64) -> Result<(), PaymentError> {
+        let _guard = acquire_reentrancy_lock(&env)?;
+        caller.require_auth();
+        require_not_paused(&env, PauseScope::Escrows)?;
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&(ESCROW_KEY, escrow_id))
+            .ok_or(PaymentError::EscrowNotFound)?;
+
+        if caller != escrow.depositor && caller != escrow.beneficiary {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        if escrow.released || escrow.claimed {
+            return Err(PaymentError::EscrowAlreadyReleased);
+        }
+
+        if escrow.arbiter.is_none() {
+            return Err(PaymentError::DisputeArbiterNotSet);
+        }
+
+        if escrow.dispute_initiated_at > 0 {
+            return Err(PaymentError::DisputeAlreadyFiled);
+        }
+
+        let now = env.ledger().timestamp();
+        escrow.dispute_initiated_at = now;
+
+        env.storage()
+            .persistent()
+            .set(&(ESCROW_KEY, escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "dispute_initiated")),
+            (escrow_id, caller.clone(), now),
+        );
+
+        record_audit(
+            &env,
+            "escrow_dispute_initiated",
+            &caller,
+            escrow_id,
+            "Escrow dispute initiated",
+        );
+
+        Ok(())
+    }
+
+    /// Get minimum dispute cooling-off period in seconds.
+    pub fn get_min_dispute_period(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&MIN_DISPUTE_PERIOD_KEY)
+            .unwrap_or(DEFAULT_MIN_DISPUTE_PERIOD)
+    }
+
+    /// Set minimum dispute cooling-off period in seconds (owner only).
+    pub fn set_min_dispute_period(env: Env, caller: Address, period: u64) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+        env.storage().instance().set(&MIN_DISPUTE_PERIOD_KEY, &period);
+        Ok(())
+    }
+
+    /// Arbiter resolves escrow dispute.
+    /// If mutual_agreement is false, resolution is blocked until the cooling-off
+    /// period (from dispute initiation) has elapsed.
+    pub fn resolve_dispute(
+        env: Env,
+        arbiter: Address,
+        escrow_id: u64,
+        release_to_beneficiary: bool,
+        mutual_agreement: bool,
+    ) -> Result<(), PaymentError> {
+        let _guard = acquire_reentrancy_lock(&env)?;
+        arbiter.require_auth();
+        require_not_paused(&env, PauseScope::Escrows)?;
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&(ESCROW_KEY, escrow_id))
+            .ok_or(PaymentError::EscrowNotFound)?;
+
+        match &escrow.arbiter {
+            Some(a) if *a == arbiter => {}
+            _ => return Err(PaymentError::Unauthorized),
+        }
+
+        if escrow.released || escrow.claimed {
+            return Err(PaymentError::EscrowAlreadyReleased);
+        }
+
+        let min_period = Self::get_min_dispute_period(env.clone());
+        let now = env.ledger().timestamp();
+
+        // Enforce cooling-off window unless both parties signed / mutual agreement
+        if !mutual_agreement {
+            if escrow.dispute_initiated_at == 0
+                || now < escrow.dispute_initiated_at.saturating_add(min_period)
+            {
+                return Err(PaymentError::DisputeCoolingOffActive);
+            }
+        }
+
+        let recipient = if release_to_beneficiary {
+            escrow.beneficiary.clone()
+        } else {
+            escrow.depositor.clone()
+        };
+
+        let token_client = token::Client::new(&env, &escrow.asset);
+        let contract_addr = env.current_contract_address();
+        add_locked(&env, &escrow.asset, -escrow.amount);
+
+        token_client.transfer(&contract_addr, &recipient, &escrow.amount);
+
+        escrow.released = true;
+        escrow.claimed = true;
+        env.storage()
+            .persistent()
+            .set(&(ESCROW_KEY, escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        inc_counter(&env, &STAT_ESC_RELEASED);
+
+        record_audit(
+            &env,
+            "escrow_dispute_resolved",
+            &arbiter,
+            escrow_id,
+            "Escrow dispute resolved",
+        );
+
+        Ok(())
     }
 
     // ═══════════════════════════════════════════════════════════

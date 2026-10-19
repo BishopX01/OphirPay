@@ -1033,3 +1033,70 @@ fn test_multi_token_locked_balance_integrity_in_emergency_withdraw() {
     let token_a_client = token::Client::new(&fix.env, &fix.token_id);
     assert_eq!(token_a_client.balance(&fix.contract_id), 40_000);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DISPUTE COOLING-OFF TIMEOUT AND MUTUAL BYPASS (#1353)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_dispute_cooling_off_timeout_and_mutual_bypass() {
+    let fix = TestFixture::new();
+    let depositor = Address::generate(&fix.env);
+    let beneficiary = Address::generate(&fix.env);
+    let arbiter = Address::generate(&fix.env);
+    fix.mint(&depositor, 100_000);
+
+    let now = fix.env.ledger().timestamp();
+    let escrow_id = fix.client.create_escrow(
+        &depositor,
+        &beneficiary,
+        &Some(arbiter.clone()),
+        &10_000i128,
+        &fix.token_id,
+        &(now + 86_400),
+        &String::from_str(&fix.env, "disputed_escrow"),
+    );
+
+    // 1. Initiating dispute by beneficiary
+    let init_res = fix.client.try_initiate_dispute(&beneficiary, &escrow_id);
+    assert!(init_res.is_ok());
+
+    // Duplicate dispute initiation is rejected
+    let dup_res = fix.client.try_initiate_dispute(&depositor, &escrow_id);
+    assert_eq!(dup_res, Err(Ok(PaymentError::DisputeAlreadyFiled)));
+
+    // 2. Unilateral resolution before cooling-off window (86,400s) elapses fails
+    fix.env.ledger().set_timestamp(now + 3600); // Only 1 hour elapsed
+    let premature_res = fix.client.try_resolve_dispute(&arbiter, &escrow_id, &true, &false);
+    assert_eq!(premature_res, Err(Ok(PaymentError::DisputeCoolingOffActive)));
+
+    let premature_arbiter = fix.client.try_release_by_arbiter(&arbiter, &escrow_id, &true);
+    assert_eq!(premature_arbiter, Err(Ok(PaymentError::DisputeCoolingOffActive)));
+
+    // 3. Mutual agreement bypasses cooling-off window immediately
+    let mutual_res = fix.client.try_resolve_dispute(&arbiter, &escrow_id, &true, &true);
+    assert!(mutual_res.is_ok());
+
+    let escrow = fix.client.get_escrow(&escrow_id);
+    assert!(escrow.released);
+    assert!(escrow.claimed);
+
+    // 4. Test dispute elapsing full cooling-off window in second escrow
+    let escrow_id_2 = fix.client.create_escrow(
+        &depositor,
+        &beneficiary,
+        &Some(arbiter.clone()),
+        &15_000i128,
+        &fix.token_id,
+        &(now + 200_000),
+        &String::from_str(&fix.env, "disputed_escrow_2"),
+    );
+    fix.client.initiate_dispute(&depositor, &escrow_id_2);
+
+    // Advance ledger beyond default 86,400s cooling-off period
+    fix.env.ledger().set_timestamp(now + 3600 + 86_401);
+    let post_timeout_res = fix.client.try_resolve_dispute(&arbiter, &escrow_id_2, &false, &false);
+    assert!(post_timeout_res.is_ok());
+    let escrow_2 = fix.client.get_escrow(&escrow_id_2);
+    assert!(escrow_2.released);
+}
