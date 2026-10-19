@@ -26,13 +26,24 @@ describe("proxy configuration", () => {
     expect(getRateLimitMax("-5")).toBe(1);
   });
 
-  it("uses the first forwarded IP, then the real IP, then unknown", () => {
+  it("uses the trusted forwarded IP based on proxy depth, then the real IP, then unknown", () => {
+    // With default depth 1, rightmost IP in X-Forwarded-For is trusted
     expect(
       getClientIp(
         new Headers({
           "x-forwarded-for": " 203.0.113.5, 198.51.100.2",
           "x-real-ip": "192.0.2.1",
         })
+      )
+    ).toBe("198.51.100.2");
+    // With depth 2, second from right is trusted
+    expect(
+      getClientIp(
+        new Headers({
+          "x-forwarded-for": " 203.0.113.5, 198.51.100.2",
+          "x-real-ip": "192.0.2.1",
+        }),
+        { trustedProxyDepth: 2 }
       )
     ).toBe("203.0.113.5");
     expect(getClientIp(new Headers({ "x-real-ip": "192.0.2.1" }))).toBe(

@@ -12,6 +12,7 @@ import { getRpcFailoverState } from "@/lib/rpc-failover";
 import { timingSafeEqual } from "@/lib/crypto";
 import { authenticateRequest } from "@/lib/api-auth";
 import { hasScope, ADMIN_SCOPE } from "@/lib/api-scopes";
+import * as prismaModule from "@/lib/prisma";
 
 /**
  * /api/metrics — Prometheus exposition endpoint.
@@ -79,7 +80,7 @@ function labels(labels: Record<string, string | number>): string {
     .join(",");
 }
 
-function buildMetrics(): string {
+export async function buildMetrics(): Promise<string> {
   const c = getMetricsSnapshot();
 
   const lines: string[] = [
@@ -262,6 +263,14 @@ function buildMetrics(): string {
     `ophirpay_sse_dropped_events_total ${c.sse_dropped_events_total}`
   );
 
+  // ── Database Connection Pool Metrics (#1371) ─────────────────
+  if (typeof prismaModule.getPrismaPrometheusMetrics === "function") {
+    const prismaMetrics = await prismaModule.getPrismaPrometheusMetrics();
+    if (prismaMetrics) {
+      lines.push("", prismaMetrics);
+    }
+  }
+
   return lines.join("\n") + "\n";
 }
 
@@ -294,7 +303,7 @@ export const GET = withMetrics("GET /api/metrics", async function GET(request: R
     return unauthorizedMetricsResponse();
   }
 
-  return new NextResponse(buildMetrics(), {
+  return new NextResponse(await buildMetrics(), {
     status: 200,
     headers: {
       "Content-Type": "text/plain; version=0.0.4",
