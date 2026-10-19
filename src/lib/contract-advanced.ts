@@ -160,6 +160,40 @@ export async function claimEscrow(
   ]);
 }
 
+/**
+ * Open a dispute on an escrow. Only the depositor or beneficiary may call this,
+ * and the escrow must have an arbiter configured.
+ */
+export async function raiseEscrowDispute(
+  caller: string,
+  escrowId: number,
+): Promise<ContractCallResult> {
+  return signAndSubmit(caller, CONTRACT_ID, "initiate_dispute", [
+    nativeToScVal(caller, { type: "address" }),
+    nativeToScVal(escrowId, { type: "u64" }),
+  ]);
+}
+
+/**
+ * Resolve a disputed escrow as its designated arbiter.
+ *
+ * `mutualAgreement` skips the contractual cooling-off window when both sides
+ * have signed. The UI uses it only for the arbitrator's explicit decision.
+ */
+export async function resolveEscrowDispute(
+  arbiter: string,
+  escrowId: number,
+  releaseToBeneficiary: boolean,
+  mutualAgreement = true,
+): Promise<ContractCallResult> {
+  return signAndSubmit(arbiter, CONTRACT_ID, "resolve_dispute", [
+    nativeToScVal(arbiter, { type: "address" }),
+    nativeToScVal(escrowId, { type: "u64" }),
+    nativeToScVal(releaseToBeneficiary, { type: "bool" }),
+    nativeToScVal(mutualAgreement, { type: "bool" }),
+  ]);
+}
+
 export async function getContractOwner(): Promise<string> {
   const result = await simulateContractCall(CONTRACT_ID, "get_owner", CHAIN_READ_SOURCE);
   if (result.status !== "SIMULATED" || typeof result.returnValue !== "string") {

@@ -334,11 +334,20 @@ export function randomAddress(): string {
  * `signMessage` keeps the wallet hook's connect() from rolling back — the
  * wallet stays connected, which is all the multisig page needs.
  */
-export function fakeFreighterInitScript(initialAddress: string): string {
+export function fakeFreighterInitScript(
+  initialAddress: string,
+  persistKey?: string,
+): string {
+  const initial = persistKey
+    ? `localStorage.getItem(${JSON.stringify(persistKey)}) || ${JSON.stringify(initialAddress)}`
+    : JSON.stringify(initialAddress);
+  const persist = persistKey
+    ? `localStorage.setItem(${JSON.stringify(persistKey)}, a);`
+    : "";
   return `
     (() => {
-      const state = { address: ${JSON.stringify(initialAddress)} };
-      window.__setFreighterAddress = (a) => { state.address = a; };
+      const state = { address: ${initial} };
+      window.__setFreighterAddress = (a) => { state.address = a; ${persist} };
       window.__getFreighterAddress = () => state.address;
       // window.freighter as consumed by @/lib/wallets/freighter
       window.freighter = {
