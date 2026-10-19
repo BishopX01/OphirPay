@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-import { PrismaClient, Prisma } from "@prisma/client";
+import { PrismaClient, Prisma, BatchStatus, RequestStatus, PaymentStatus } from "@prisma/client";
 
 export const prisma = new PrismaClient();
 
@@ -273,10 +273,10 @@ async function seedStaging() {
   }
 
   // 3. Batches
-  const stagingBatches = [
-    { name: "October Contractor Payouts", desc: "Disbursement batch for core engineering contractors", status: "COMPLETED", daysAgo: 14 },
-    { name: "Bi-Weekly Community Grants", desc: "Wave 10 ecosystem mini-grant distributions", status: "COMPLETED", daysAgo: 7 },
-    { name: "Vendor Invoices Batch #41", desc: "Monthly SaaS operational expenses", status: "PENDING", daysAgo: 1 },
+  const stagingBatches: Array<{ name: string; desc: string; status: BatchStatus; daysAgo: number }> = [
+    { name: "October Contractor Payouts", desc: "Disbursement batch for core engineering contractors", status: BatchStatus.COMPLETED, daysAgo: 14 },
+    { name: "Bi-Weekly Community Grants", desc: "Wave 10 ecosystem mini-grant distributions", status: BatchStatus.COMPLETED, daysAgo: 7 },
+    { name: "Vendor Invoices Batch #41", desc: "Monthly SaaS operational expenses", status: BatchStatus.PROCESSING, daysAgo: 1 },
   ];
 
   for (const b of stagingBatches) {
@@ -301,7 +301,7 @@ async function seedStaging() {
       assetCode: "USDC",
       destAddress: "GCZ74M52C6WSZ3QJ2X7QW237J3F2QYGL33N2B5G7NNDP3NPYM2F2327D",
       nextRunAt: futureDate(14),
-      active: true,
+      isActive: true,
       createdAt: pastDate(30),
     },
   });
@@ -320,17 +320,17 @@ async function seedStaging() {
   });
 
   // 5. Payment Requests / Links
-  const paymentRequests = [
-    { title: "Consulting Invoice #701", amount: 1200, status: "ACTIVE" as const, daysAgo: 3 },
-    { title: "Donation Campaign — Clean Oceans", amount: 50, status: "PAID" as const, daysAgo: 10 },
-    { title: "Expired Booking Reservation", amount: 300, status: "EXPIRED" as const, daysAgo: 20 },
+  const paymentRequests: Array<{ description: string; amount: number; status: RequestStatus; daysAgo: number }> = [
+    { description: "Consulting Invoice #701", amount: 1200, status: RequestStatus.PENDING, daysAgo: 3 },
+    { description: "Donation Campaign — Clean Oceans", amount: 50, status: RequestStatus.PAID, daysAgo: 10 },
+    { description: "Expired Booking Reservation", amount: 300, status: RequestStatus.EXPIRED, daysAgo: 20 },
   ];
 
   for (const pr of paymentRequests) {
     await prisma.paymentRequest.create({
       data: {
         userId: merchantId,
-        title: pr.title,
+        description: pr.description,
         amount: pr.amount,
         assetCode: "USDC",
         status: pr.status,
@@ -411,10 +411,10 @@ async function seedStaging() {
   for (const ae of auditEntries) {
     await prisma.auditLog.create({
       data: {
-        userId: merchantId,
         action: ae.action,
         actor: ae.actor,
-        details: ae.details,
+        target: merchantId,
+        details: { description: ae.details },
         createdAt: pastDate(ae.daysAgo),
       },
     });
@@ -425,7 +425,7 @@ async function seedStaging() {
     data: {
       userId: merchantId,
       name: "Staging Integration Testing Key",
-      keyPrefix: "oph_stg_test",
+      prefix: "oph_stg_",
       keyHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       scopes: ["payments:read", "payments:write", "webhooks:read"],
       createdAt: pastDate(25),
@@ -462,7 +462,7 @@ async function seedLoad() {
         name: `Load Test Batch #${b}`,
         description: `Synthetic load batch #${b}`,
         userId: user.id,
-        status: b === batchCount ? "PENDING" : "COMPLETED",
+        status: b === batchCount ? BatchStatus.PROCESSING : BatchStatus.COMPLETED,
         createdAt: pastDate(b * 3),
       },
     });
