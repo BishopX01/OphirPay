@@ -1075,4 +1075,55 @@ fn test_create_stream_valid_boundaries_succeed() {
     assert_eq!(max_stream_id, 2);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Fee Configuration & Collector Update On-Chain Events (#1349)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_fee_config_and_collector_update_emits_on_chain_event() {
+    let fix = TestFixture::new();
+    let collector_1 = Address::generate(&fix.env);
+    let collector_2 = Address::generate(&fix.env);
+
+    // Initial fee configuration
+    fix.client.set_fee_config(
+        &fix.owner,
+        &50u32,
+        &100u32,
+        &150u32,
+        &10i128,
+        &1i128,
+        &true,
+    );
+    let config = fix.client.get_fee_config().unwrap();
+    assert_eq!(config.payment_fee_bps, 50);
+
+    // Set collector
+    fix.client.set_fee_collector(&fix.owner, &collector_1);
+    assert_eq!(fix.client.get_fee_collector(), Some(collector_1.clone()));
+
+    // Update collector
+    fix.client.set_fee_collector(&fix.owner, &collector_2);
+    assert_eq!(fix.client.get_fee_collector(), Some(collector_2.clone()));
+
+    // Update fee config again
+    fix.client.set_fee_config(
+        &fix.owner,
+        &100u32,
+        &200u32,
+        &300u32,
+        &20i128,
+        &2i128,
+        &true,
+    );
+    let updated_config = fix.client.get_fee_config().unwrap();
+    assert_eq!(updated_config.payment_fee_bps, 100);
+
+    // Verify events were emitted
+    use soroban_sdk::testutils::Events as _;
+    let contract_events = fix.env.events().all().filter_by_contract(&fix.contract_id);
+    assert!(!contract_events.events().is_empty());
+}
+
+
 
