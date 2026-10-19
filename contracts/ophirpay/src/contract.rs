@@ -1568,6 +1568,7 @@ impl OphirPayContract {
 
         // Pause OphirPay
         env.storage().instance().set(&PAUSED, &true);
+        env.storage().instance().set(&PAUSE_FLAGS, &PAUSE_ALL);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         // Cross-contract call: pause the Emitter if linked. The result is
@@ -1602,6 +1603,7 @@ impl OphirPayContract {
 
         // Unpause OphirPay
         env.storage().instance().set(&PAUSED, &false);
+        env.storage().instance().set(&PAUSE_FLAGS, &0u32);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         // Cross-contract call: unpause the Emitter if linked. Result propagated
@@ -1677,7 +1679,49 @@ impl OphirPayContract {
             }
             id += 1;
         }
-        paused
+        paused
+    }
+
+    /// Owner-only: pause or resume specific subsystems using capability bitflags (#1358).
+    /// Multiple subsystems can be targeted simultaneously by OR-ing flags.
+    pub fn set_subsystem_pause(
+        env: Env,
+        caller: Address,
+        subsystem: u32,
+        paused: bool,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+
+        let mut flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+        if paused {
+            flags |= subsystem;
+        } else {
+            flags &= !subsystem;
+        }
+        env.storage().instance().set(&PAUSE_FLAGS, &flags);
+        env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        let action = if paused { "subsystem_paused" } else { "subsystem_resumed" };
+        let details = if paused {
+            "Subsystem paused via bitflag"
+        } else {
+            "Subsystem resumed via bitflag"
+        };
+        record_audit(&env, action, &caller, subsystem as u64, details);
+        Ok(())
+    }
+
+    /// Read-only: whether a specific subsystem bitflag is currently paused.
+    pub fn is_subsystem_paused(env: Env, subsystem: u32) -> bool {
+        let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
+        let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+        globally_paused || (flags & subsystem) != 0
+    }
+
+    /// Read-only: current active subsystem pause bitmask flags.
+    pub fn get_pause_flags(env: Env) -> u32 {
+        env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0)
     }
 
     /// Get the current locked balance (escrows, streams, proposal deposits).

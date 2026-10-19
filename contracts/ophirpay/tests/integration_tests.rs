@@ -994,3 +994,81 @@ fn test_memo_validation_rejects_oversized_and_control_chars_in_record_payment_an
     assert!(matches!(res_batch, Err(Ok(PaymentError::MemoTooLong))));
 }
 
+// ===========================================================================
+// SUBSYSTEM CAPABILITY BITFLAGS ISOLATION (#1358)
+// ===========================================================================
+
+#[test]
+fn test_subsystem_pause_bitflags_isolation() {
+    use ophirpay_contract::{
+        PAUSE_ALL, PAUSE_ESCROWS, PAUSE_PAYMENTS, PAUSE_STREAMS,
+    };
+
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    let other = Address::generate(&fix.env);
+    fix.mint(&payer, 100_000);
+
+    // Initial state: nothing paused
+    assert_eq!(fix.client.get_pause_flags(), 0);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_ESCROWS), false);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_PAYMENTS), false);
+
+    // 1. Non-owner cannot pause subsystems
+    let unauth = fix.client.try_set_subsystem_pause(&other, &PAUSE_ESCROWS, &true);
+    assert_eq!(unauth, Err(Ok(PaymentError::Unauthorized)));
+
+    // 2. Owner surgically pauses only ESCROWS
+    fix.client.set_subsystem_pause(&fix.owner, &PAUSE_ESCROWS, &true);
+    assert_eq!(fix.client.get_pause_flags(), PAUSE_ESCROWS);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_ESCROWS), true);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_PAYMENTS), false);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_STREAMS), false);
+
+    // 3. Escrow creation is blocked by granular pause
+    let now = fix.env.ledger().timestamp();
+    let res_escrow = fix.client.try_create_escrow(
+        &payer,
+        &payee,
+        &Option::<Address>::None,
+        &100i128,
+        &fix.token_id,
+        &(now + 3600),
+        &String::from_str(&fix.env, "test"),
+    );
+    assert_eq!(res_escrow, Err(Ok(PaymentError::ContractPaused)));
+
+    // 4. Normal direct payments continue uninterrupted!
+    let empty = String::from_str(&fix.env, "");
+    let pay_id = fix.client.record_payment(&payer, &payee, &500i128, &fix.token_id, &empty, &empty);
+    assert_eq!(pay_id, 1);
+
+    // 5. Unpausing escrows restores capability
+    fix.client.set_subsystem_pause(&fix.owner, &PAUSE_ESCROWS, &false);
+    assert_eq!(fix.client.get_pause_flags(), 0);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_ESCROWS), false);
+
+    let escrow_id = fix.client.create_escrow(
+        &payer,
+        &payee,
+        &Option::<Address>::None,
+        &100i128,
+        &fix.token_id,
+        &(now + 3600),
+        &String::from_str(&fix.env, "test"),
+    );
+    assert_eq!(escrow_id, 1);
+
+    // 6. Emergency pause all sets PAUSE_ALL in bitflags, unpause clears to 0
+    fix.client.emergency_pause_all(&fix.owner);
+    assert_eq!(fix.client.get_pause_flags(), PAUSE_ALL);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_PAYMENTS), true);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_ESCROWS), true);
+
+    fix.client.emergency_unpause_all(&fix.owner);
+    assert_eq!(fix.client.get_pause_flags(), 0);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_PAYMENTS), false);
+    assert_eq!(fix.client.is_subsystem_paused(&PAUSE_ESCROWS), false);
+}
+

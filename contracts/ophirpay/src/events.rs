@@ -209,6 +209,30 @@ pub fn pause_scope_key(env: &Env, scope: PauseScope) -> Symbol {
 }
 
 /// Whether a single scope is paused, ignoring the global flag.
+/// Map a PauseScope to its corresponding capability bitflag (#1358).
+pub fn scope_to_pause_flag(scope: PauseScope) -> u32 {
+    match scope {
+        PauseScope::Payments => PAUSE_PAYMENTS,
+        PauseScope::Escrows => PAUSE_ESCROWS,
+        PauseScope::Streams => PAUSE_STREAMS,
+        PauseScope::Recurring => PAUSE_RECURRING,
+        PauseScope::Refunds => PAUSE_REFUNDS,
+        PauseScope::Governance => PAUSE_GOVERNANCE,
+        PauseScope::Hooks => PAUSE_HOOKS,
+        PauseScope::Batches => PAUSE_BATCHES,
+    }
+}
+
+/// Guard: reject execution if the contract is globally paused or the given subsystem bitflag is set (#1358).
+pub fn require_subsystem_active(env: &Env, subsystem: u32) -> Result<(), PaymentError> {
+    let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
+    let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+    if globally_paused || (flags & subsystem) != 0 {
+        return Err(PaymentError::ContractPaused);
+    }
+    Ok(())
+}
+
 pub fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
     env.storage()
         .instance()
@@ -221,7 +245,9 @@ pub fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
 /// first so it always overrides the per-scope flags.
 pub fn require_not_paused(env: &Env, scope: PauseScope) -> Result<(), PaymentError> {
     let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
-    if globally_paused || is_scope_flag_set(env, scope) {
+    let flag = scope_to_pause_flag(scope);
+    let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+    if globally_paused || is_scope_flag_set(env, scope) || (flags & flag) != 0 {
         return Err(PaymentError::ContractPaused);
     }
     Ok(())
