@@ -49,6 +49,10 @@ export const metadata: Metadata = {
   colorScheme: "dark light",
 };
 
+import { THEME_BLOCKING_SCRIPT } from "@/lib/theme-script";
+
+export { THEME_BLOCKING_SCRIPT };
+
 export default async function RootLayout({
   children,
 }: Readonly<{
@@ -66,20 +70,10 @@ export default async function RootLayout({
             first paint to prevent a flash of the wrong theme (FOUC). Must stay
             in sync with resolveTheme() in src/hooks/useTheme.tsx. */}
         <script
+          id="theme-blocking-script"
           nonce={nonce}
           dangerouslySetInnerHTML={{
-            __html: `
-              (function () {
-                try {
-                  var stored = localStorage.getItem("ophirpay-theme");
-                  var dark = stored === "dark" ||
-                    ((stored === null || stored === "system") &&
-                      window.matchMedia("(prefers-color-scheme: dark)").matches);
-                  if (dark) document.documentElement.classList.add("dark");
-                  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-                } catch (e) {}
-              })();
-            `,
+            __html: THEME_BLOCKING_SCRIPT,
           }}
         />
         {/* JSON-LD structured data for SEO */}
