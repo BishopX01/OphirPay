@@ -98,9 +98,29 @@ export function deriveMetrics(result) {
  * `margin`; error rates are compared against their absolute cap. SSE rows have
  * no latency/non-2xx numbers, so only their transport error rate is checked.
  */
+/**
+ * Resolve the latency margin for one endpoint.
+ *
+ * The file-wide margin absorbs shared-runner noise for the broad endpoint
+ * table. A purpose-built gate (for example the 200-connection payments
+ * ingestion benchmark added in #1404) can pin its own published SLO with
+ * `"margin": 1` instead of inheriting the file's relaxation.
+ */
+export function resolveEndpointMargin(thresholds, margin) {
+  const raw = thresholds?.margin ?? margin;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(
+      `Endpoint margin must be a positive number (got "${raw}")`
+    );
+  }
+  return value;
+}
+
 export function evaluateResult(result, thresholds, margin) {
   const measured = deriveMetrics(result);
   const checks = [];
+  const endpointMargin = resolveEndpointMargin(thresholds, margin);
 
   const add = (metric, value, allowed) => {
     if (value === null || value === undefined) return;
@@ -111,12 +131,12 @@ export function evaluateResult(result, thresholds, margin) {
   add(
     "p95 latency",
     measured.p95Ms,
-    thresholds.p95Ms == null ? null : thresholds.p95Ms * margin
+    thresholds.p95Ms == null ? null : thresholds.p95Ms * endpointMargin
   );
   add(
     "p99 latency",
     measured.p99Ms,
-    thresholds.p99Ms == null ? null : thresholds.p99Ms * margin
+    thresholds.p99Ms == null ? null : thresholds.p99Ms * endpointMargin
   );
   add("error rate", measured.errorPct, thresholds.errorPct);
   if (!measured.sse) {
@@ -126,6 +146,7 @@ export function evaluateResult(result, thresholds, margin) {
   return {
     endpoint: result.endpoint,
     connections: Number(result.connections) || 0,
+    margin: endpointMargin,
     measured,
     checks,
     ok: checks.length > 0 && checks.every((c) => c.ok),
