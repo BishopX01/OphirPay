@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   getMetricsSnapshot,
   getEndpointMetrics,
+  getRpcMetricsSnapshot,
   recordRpcFailoverState,
   LATENCY_BUCKET_BOUNDS,
 } from "@/lib/metrics-counters";
@@ -12,6 +13,7 @@ import { getRpcFailoverState } from "@/lib/rpc-failover";
 import { timingSafeEqual } from "@/lib/crypto";
 import { authenticateRequest } from "@/lib/api-auth";
 import { hasScope, ADMIN_SCOPE } from "@/lib/api-scopes";
+import * as prismaModule from "@/lib/prisma";
 
 /**
  * /api/metrics — Prometheus exposition endpoint.
@@ -79,7 +81,7 @@ function labels(labels: Record<string, string | number>): string {
     .join(",");
 }
 
-function buildMetrics(): string {
+export async function buildMetrics(): Promise<string> {
   const c = getMetricsSnapshot();
 
   const lines: string[] = [
@@ -235,6 +237,34 @@ function buildMetrics(): string {
     `ophirpay_rpc_failover_longest_fallback_duration_seconds ${(failover.longestFallbackDurationMs / 1000).toFixed(3)}`
   );
 
+  // ── Soroban RPC performance & requests (issue #1412) ────────
+  const rpcMetrics = getRpcMetricsSnapshot();
+  lines.push(
+    "",
+    "# HELP ophirpay_rpc_request_duration_seconds Latency of Soroban RPC calls in seconds",
+    "# TYPE ophirpay_rpc_request_duration_seconds histogram"
+  );
+  for (let i = 0; i < LATENCY_BUCKET_BOUNDS.length; i++) {
+    const le = LATENCY_BUCKET_BOUNDS[i];
+    lines.push(
+      `ophirpay_rpc_request_duration_seconds_bucket{le="${le}"} ${rpcMetrics.buckets[i]}`
+    );
+  }
+  lines.push(
+    `ophirpay_rpc_request_duration_seconds_bucket{le="+Inf"} ${rpcMetrics.buckets[LATENCY_BUCKET_BOUNDS.length]}`,
+    `ophirpay_rpc_request_duration_seconds_sum ${rpcMetrics.latencySum}`,
+    `ophirpay_rpc_request_duration_seconds_count ${rpcMetrics.latencyCount}`,
+    "",
+    "# HELP ophirpay_rpc_requests_total Total Soroban RPC requests served by status class",
+    "# TYPE ophirpay_rpc_requests_total counter",
+    `ophirpay_rpc_requests_total{status_class="2xx"} ${rpcMetrics.requestsTotal["2xx"]}`,
+    `ophirpay_rpc_requests_total{status_class="5xx"} ${rpcMetrics.requestsTotal["5xx"]}`,
+    "",
+    "# HELP ophirpay_database_pool_wait_seconds Prisma database connection pool queue wait duration in seconds",
+    "# TYPE ophirpay_database_pool_wait_seconds gauge",
+    `ophirpay_database_pool_wait_seconds ${c.database_pool_wait_seconds}`
+  );
+
   // ── Live gauges: process memory + open SSE connections ──────
   // Sampled on scrape so load tests can assert memory stays bounded and
   // that SSE connections are released after clients disconnect.
@@ -261,6 +291,14 @@ function buildMetrics(): string {
     "# TYPE ophirpay_sse_dropped_events_total counter",
     `ophirpay_sse_dropped_events_total ${c.sse_dropped_events_total}`
   );
+
+  // ── Database Connection Pool Metrics (#1371) ─────────────────
+  if (typeof prismaModule.getPrismaPrometheusMetrics === "function") {
+    const prismaMetrics = await prismaModule.getPrismaPrometheusMetrics();
+    if (prismaMetrics) {
+      lines.push("", prismaMetrics);
+    }
+  }
 
   return lines.join("\n") + "\n";
 }
@@ -294,7 +332,7 @@ export const GET = withMetrics("GET /api/metrics", async function GET(request: R
     return unauthorizedMetricsResponse();
   }
 
-  return new NextResponse(buildMetrics(), {
+  return new NextResponse(await buildMetrics(), {
     status: 200,
     headers: {
       "Content-Type": "text/plain; version=0.0.4",

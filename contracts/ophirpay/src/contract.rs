@@ -51,6 +51,30 @@ pub const BUMP_MAINTENANCE_TTL: u32 = 100_000;
 // `get_reason_code_analytics`.
 pub const MAX_READER_ENTRIES: u32 = 100;
 
+// ── Memo Text Limit (issue #1360) ─────────────────────────────
+/// Maximum byte length for memo/metadata strings across contract entrypoints (#1360).
+pub const MAX_MEMO_BYTES: u32 = 64;
+
+/// Validate memo/metadata text: length cannot exceed `MAX_MEMO_BYTES` (64 bytes)
+/// and must not contain ASCII control characters (< 0x20 except \t and \n) or DEL (0x7F).
+pub fn validate_memo_text(memo: &String) -> Result<(), PaymentError> {
+    let len = memo.len();
+    if len > MAX_MEMO_BYTES {
+        return Err(PaymentError::MemoTooLong);
+    }
+    if len > 0 {
+        let mut buf = [0u8; 64];
+        let slice = &mut buf[..len as usize];
+        memo.copy_into_slice(slice);
+        for &b in slice.iter() {
+            if (b < 0x20 && b != b'\t' && b != b'\n') || b == 0x7f {
+                return Err(PaymentError::MemoTooLong);
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Contract ───────────────────────────────────────────────────
 
 #[contract]
@@ -146,12 +170,16 @@ impl OphirPayContract {
             }
         }
 
+        if unique_signers.is_empty() {
+            return Err(PaymentError::EmptySignersList);
+        }
+
         if unique_signers.len() > 50 {
             return Err(PaymentError::MaxSignersExceeded);
         }
 
         if threshold == 0 || threshold > unique_signers.len() {
-            return Err(PaymentError::InvalidAmount);
+            return Err(PaymentError::InvalidThreshold);
         }
 
         let config = MultisigConfig {
@@ -432,6 +460,9 @@ impl OphirPayContract {
         if payment_fee_bps > 1000 || escrow_fee_bps > 1000 || stream_fee_bps > 1000 {
             return Err(PaymentError::FeeTooHigh);
         }
+        let prev_config: Option<FeeConfig> = env.storage().instance().get(&FEE_KEY);
+        let current_collector: Option<Address> = env.storage().instance().get(&FEE_COLL);
+
         let config = FeeConfig {
             payment_fee_bps,
             escrow_fee_bps,
@@ -467,6 +498,23 @@ impl OphirPayContract {
             &caller,
             0,
             "Fee configuration updated",
+        );
+
+        emit_fee_config_updated(
+            &env,
+            &FeeConfigUpdated {
+                previous_collector: current_collector.clone(),
+                new_collector: current_collector,
+                previous_payment_fee_bps: prev_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
+                new_payment_fee_bps: payment_fee_bps,
+                previous_escrow_fee_bps: prev_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
+                new_escrow_fee_bps: escrow_fee_bps,
+                previous_stream_fee_bps: prev_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
+                new_stream_fee_bps: stream_fee_bps,
+                enabled,
+                updated_by: caller.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
         );
 
         Ok(())
@@ -505,14 +553,110 @@ impl OphirPayContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_owner(&env, &caller)?;
+        let prev_collector: Option<Address> = env.storage().instance().get(&FEE_COLL);
+        let current_config: Option<FeeConfig> = env.storage().instance().get(&FEE_KEY);
+
         env.storage().instance().set(&FEE_COLL, &collector);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+        record_audit(
+            &env,
+            "fee_collector_set",
+            &caller,
+            0,
+            "Fee collector updated",
+        );
+
+        emit_fee_config_updated(
+            &env,
+            &FeeConfigUpdated {
+                previous_collector: prev_collector,
+                new_collector: Some(collector),
+                previous_payment_fee_bps: current_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
+                new_payment_fee_bps: current_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
+                previous_escrow_fee_bps: current_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
+                new_escrow_fee_bps: current_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
+                previous_stream_fee_bps: current_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
+                new_stream_fee_bps: current_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
+                enabled: current_config.as_ref().map(|c| c.enabled).unwrap_or(false),
+                updated_by: caller.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
         Ok(())
     }
 
     /// Get the fee collector address.
     pub fn get_fee_collector(env: Env) -> Option<Address> {
         env.storage().instance().get(&FEE_COLL)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  TOKEN DECIMAL PRECISION CONFIGURATION (#1347)
+    // ═══════════════════════════════════════════════════════════
+
+    /// Configure allowable decimal precision for a specific token asset (owner only).
+    pub fn set_token_decimals(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        decimals: u32,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        env.storage()
+            .persistent()
+            .set(&(TOKEN_DEC_KEY, asset.clone()), &decimals);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(TOKEN_DEC_KEY, asset), BUMP_MIN_TTL, BUMP_MAX_TTL);
+        Ok(())
+    }
+
+    /// Query configured decimal places for a token asset (defaults to 7 for Stellar standard).
+    pub fn get_token_decimals(env: Env, asset: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&(TOKEN_DEC_KEY, asset))
+            .unwrap_or(DEFAULT_STELLAR_DECIMALS)
+    }
+
+    /// Calculate minimum quantum step in stroops for given decimal precision.
+    pub fn token_quantum_step(decimals: u32) -> Result<i128, PaymentError> {
+        if decimals > MAX_TOKEN_DECIMALS {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        if decimals < DEFAULT_STELLAR_DECIMALS {
+            let exp = DEFAULT_STELLAR_DECIMALS - decimals;
+            let mut step: i128 = 1;
+            for _ in 0..exp {
+                step = step.saturating_mul(10);
+            }
+            Ok(step)
+        } else {
+            Ok(1)
+        }
+    }
+
+    /// Validate that an amount complies with the token asset's decimal precision.
+    pub fn validate_token_decimal_precision(
+        env: &Env,
+        asset: &Address,
+        amount: i128,
+    ) -> Result<(), PaymentError> {
+        let decimals: u32 = env
+            .storage()
+            .persistent()
+            .get(&(TOKEN_DEC_KEY, asset.clone()))
+            .unwrap_or(DEFAULT_STELLAR_DECIMALS);
+        let step = Self::token_quantum_step(decimals)?;
+        if step > 1 && amount % step != 0 {
+            return Err(PaymentError::InvalidDecimalPrecision);
+        }
+        Ok(())
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -754,7 +898,7 @@ impl OphirPayContract {
             let contract_addr = env.current_contract_address();
             token_client.transfer(&proposer, &contract_addr, &deposit_amount);
             // Track deposit in LOCKED_BALANCE so emergency_withdraw can't drain it
-            add_locked(&env, deposit_amount);
+            add_locked(&env, &deposit_asset, deposit_amount);
         }
 
         let now = env.ledger().timestamp();
@@ -904,7 +1048,7 @@ impl OphirPayContract {
             let contract_addr = env.current_contract_address();
             token_client.transfer(&contract_addr, &proposal.proposer, &proposal.deposit_amount);
             // Release deposit from LOCKED_BALANCE now that it's refunded
-            add_locked(&env, -proposal.deposit_amount);
+            add_locked(&env, &proposal.deposit_asset, -proposal.deposit_amount);
         }
 
         env.events().publish(
@@ -1104,6 +1248,8 @@ impl OphirPayContract {
     ) -> Result<u64, PaymentError> {
         payer.require_auth();
         require_not_paused(&env, PauseScope::Payments)?;
+        validate_memo_text(&tx_hash)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -1542,6 +1688,7 @@ impl OphirPayContract {
 
         // Pause OphirPay
         env.storage().instance().set(&PAUSED, &true);
+        env.storage().instance().set(&PAUSE_FLAGS, &PAUSE_ALL);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         // Cross-contract call: pause the Emitter if linked. The result is
@@ -1576,6 +1723,7 @@ impl OphirPayContract {
 
         // Unpause OphirPay
         env.storage().instance().set(&PAUSED, &false);
+        env.storage().instance().set(&PAUSE_FLAGS, &0u32);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         // Cross-contract call: unpause the Emitter if linked. Result propagated
@@ -1651,12 +1799,62 @@ impl OphirPayContract {
             }
             id += 1;
         }
-        paused
+        paused
+    }
+
+    /// Owner-only: pause or resume specific subsystems using capability bitflags (#1358).
+    /// Multiple subsystems can be targeted simultaneously by OR-ing flags.
+    pub fn set_subsystem_pause(
+        env: Env,
+        caller: Address,
+        subsystem: u32,
+        paused: bool,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+
+        let mut flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+        if paused {
+            flags |= subsystem;
+        } else {
+            flags &= !subsystem;
+        }
+        env.storage().instance().set(&PAUSE_FLAGS, &flags);
+        env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        let action = if paused { "subsystem_paused" } else { "subsystem_resumed" };
+        let details = if paused {
+            "Subsystem paused via bitflag"
+        } else {
+            "Subsystem resumed via bitflag"
+        };
+        record_audit(&env, action, &caller, subsystem as u64, details);
+        Ok(())
+    }
+
+    /// Read-only: whether a specific subsystem bitflag is currently paused.
+    pub fn is_subsystem_paused(env: Env, subsystem: u32) -> bool {
+        let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
+        let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+        globally_paused || (flags & subsystem) != 0
+    }
+
+    /// Read-only: current active subsystem pause bitmask flags.
+    pub fn get_pause_flags(env: Env) -> u32 {
+        env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0)
     }
 
     /// Get the current locked balance (escrows, streams, proposal deposits).
     pub fn get_locked_balance(env: Env) -> i128 {
         env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0)
+    }
+
+    /// Get the current locked balance for a specific token asset.
+    pub fn get_token_locked_balance(env: Env, asset: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&(LOCKED_BALANCE, asset))
+            .unwrap_or(0)
     }
 
     /// Check if the reentrancy lock is currently held.
@@ -1829,11 +2027,15 @@ impl OphirPayContract {
             return Err(PaymentError::NoTokensToWithdraw);
         }
 
-        // INVARIANT: cannot withdraw locked user funds
+        // INVARIANT: cannot withdraw locked user funds for this specific asset
         let token_client = token::Client::new(&env, &asset);
         let contract_addr = env.current_contract_address();
         let contract_balance = token_client.balance(&contract_addr);
-        let locked: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
+        let locked: i128 = env
+            .storage()
+            .instance()
+            .get(&(LOCKED_BALANCE, asset.clone()))
+            .unwrap_or(0);
         let unlocked = contract_balance.saturating_sub(locked);
         if amount > unlocked {
             return Err(PaymentError::NoTokensToWithdraw);
@@ -2039,9 +2241,12 @@ impl OphirPayContract {
     ) -> Result<u64, PaymentError> {
         payer.require_auth();
         require_not_paused(&env, PauseScope::Payments)?;
+        validate_memo_text(&tx_hash)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
+        Self::validate_token_decimal_precision(&env, &asset, amount)?;
 
         // Idempotency (#804): (payer, tx_hash) identifies a payment. Replaying
         // the same call returns the original id; replaying it with a different
@@ -2203,6 +2408,7 @@ impl OphirPayContract {
         let _guard = acquire_reentrancy_lock(&env)?;
         depositor.require_auth();
         require_not_paused(&env, PauseScope::Escrows)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -2212,7 +2418,7 @@ impl OphirPayContract {
         let contract_addr = env.current_contract_address();
         token_client.transfer(&depositor, &contract_addr, &amount);
 
-        add_locked(&env, amount);
+        add_locked(&env, &asset, amount);
 
         let mut count: u64 = env.storage().instance().get(&ESCROW_COUNT).unwrap_or(0);
         count += 1;
@@ -2229,11 +2435,13 @@ impl OphirPayContract {
             released: false,
             claimed: false,
             metadata,
+            dispute_initiated_at: 0,
         };
 
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, count), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, count));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, count), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2283,7 +2491,7 @@ impl OphirPayContract {
         // Transfer tokens to beneficiary (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &escrow.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -escrow.amount);
+        add_locked(&env, &escrow.asset, -escrow.amount);
 
         token_client.transfer(&contract_addr, &escrow.beneficiary, &escrow.amount);
 
@@ -2292,6 +2500,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, escrow_id), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2337,6 +2546,15 @@ impl OphirPayContract {
             return Err(PaymentError::EscrowAlreadyReleased);
         }
 
+        // If dispute has been initiated, enforce cooling-off window
+        if escrow.dispute_initiated_at > 0 {
+            let min_period = Self::get_min_dispute_period(env.clone());
+            let now = env.ledger().timestamp();
+            if now < escrow.dispute_initiated_at.saturating_add(min_period) {
+                return Err(PaymentError::DisputeCoolingOffActive);
+            }
+        }
+
         let recipient = if release_to_beneficiary {
             escrow.beneficiary.clone()
         } else {
@@ -2345,7 +2563,7 @@ impl OphirPayContract {
 
         let token_client = token::Client::new(&env, &escrow.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -escrow.amount);
+        add_locked(&env, &escrow.asset, -escrow.amount);
 
         token_client.transfer(&contract_addr, &recipient, &escrow.amount);
 
@@ -2354,6 +2572,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, escrow_id), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2400,7 +2619,7 @@ impl OphirPayContract {
         // Transfer tokens to beneficiary (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &escrow.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -escrow.amount);
+        add_locked(&env, &escrow.asset, -escrow.amount);
 
         token_client.transfer(&contract_addr, &beneficiary, &escrow.amount);
 
@@ -2408,6 +2627,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(ESCROW_KEY, escrow_id), &escrow);
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
         env.storage()
             .persistent()
             .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2427,15 +2647,162 @@ impl OphirPayContract {
 
     /// Get escrow by ID
     pub fn get_escrow(env: Env, escrow_id: u64) -> Result<Escrow, PaymentError> {
-        env.storage()
+        let escrow: Escrow = env.storage()
             .persistent()
             .get(&(ESCROW_KEY, escrow_id))
-            .ok_or(PaymentError::EscrowNotFound)
+            .ok_or(PaymentError::EscrowNotFound)?;
+        touch_record_ttl(&env, &(ESCROW_KEY, escrow_id));
+        Ok(escrow)
     }
 
     /// Get escrow count
     pub fn get_escrow_count(env: Env) -> u64 {
         env.storage().instance().get(&ESCROW_COUNT).unwrap_or(0)
+    }
+
+    /// Either depositor or beneficiary can initiate a dispute on an escrow with an arbiter.
+    pub fn initiate_dispute(env: Env, caller: Address, escrow_id: u64) -> Result<(), PaymentError> {
+        let _guard = acquire_reentrancy_lock(&env)?;
+        caller.require_auth();
+        require_not_paused(&env, PauseScope::Escrows)?;
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&(ESCROW_KEY, escrow_id))
+            .ok_or(PaymentError::EscrowNotFound)?;
+
+        if caller != escrow.depositor && caller != escrow.beneficiary {
+            return Err(PaymentError::Unauthorized);
+        }
+
+        if escrow.released || escrow.claimed {
+            return Err(PaymentError::EscrowAlreadyReleased);
+        }
+
+        if escrow.arbiter.is_none() {
+            return Err(PaymentError::DisputeArbiterNotSet);
+        }
+
+        if escrow.dispute_initiated_at > 0 {
+            return Err(PaymentError::DisputeAlreadyFiled);
+        }
+
+        let now = env.ledger().timestamp();
+        escrow.dispute_initiated_at = now;
+
+        env.storage()
+            .persistent()
+            .set(&(ESCROW_KEY, escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), Symbol::new(&env, "dispute_initiated")),
+            (escrow_id, caller.clone(), now),
+        );
+
+        record_audit(
+            &env,
+            "escrow_dispute_initiated",
+            &caller,
+            escrow_id,
+            "Escrow dispute initiated",
+        );
+
+        Ok(())
+    }
+
+    /// Get minimum dispute cooling-off period in seconds.
+    pub fn get_min_dispute_period(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&MIN_DISPUTE_PERIOD_KEY)
+            .unwrap_or(DEFAULT_MIN_DISPUTE_PERIOD)
+    }
+
+    /// Set minimum dispute cooling-off period in seconds (owner only).
+    pub fn set_min_dispute_period(env: Env, caller: Address, period: u64) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+        env.storage().instance().set(&MIN_DISPUTE_PERIOD_KEY, &period);
+        Ok(())
+    }
+
+    /// Arbiter resolves escrow dispute.
+    /// If mutual_agreement is false, resolution is blocked until the cooling-off
+    /// period (from dispute initiation) has elapsed.
+    pub fn resolve_dispute(
+        env: Env,
+        arbiter: Address,
+        escrow_id: u64,
+        release_to_beneficiary: bool,
+        mutual_agreement: bool,
+    ) -> Result<(), PaymentError> {
+        let _guard = acquire_reentrancy_lock(&env)?;
+        arbiter.require_auth();
+        require_not_paused(&env, PauseScope::Escrows)?;
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&(ESCROW_KEY, escrow_id))
+            .ok_or(PaymentError::EscrowNotFound)?;
+
+        match &escrow.arbiter {
+            Some(a) if *a == arbiter => {}
+            _ => return Err(PaymentError::Unauthorized),
+        }
+
+        if escrow.released || escrow.claimed {
+            return Err(PaymentError::EscrowAlreadyReleased);
+        }
+
+        let min_period = Self::get_min_dispute_period(env.clone());
+        let now = env.ledger().timestamp();
+
+        // Enforce cooling-off window unless both parties signed / mutual agreement
+        if !mutual_agreement {
+            if escrow.dispute_initiated_at == 0
+                || now < escrow.dispute_initiated_at.saturating_add(min_period)
+            {
+                return Err(PaymentError::DisputeCoolingOffActive);
+            }
+        }
+
+        let recipient = if release_to_beneficiary {
+            escrow.beneficiary.clone()
+        } else {
+            escrow.depositor.clone()
+        };
+
+        let token_client = token::Client::new(&env, &escrow.asset);
+        let contract_addr = env.current_contract_address();
+        add_locked(&env, &escrow.asset, -escrow.amount);
+
+        token_client.transfer(&contract_addr, &recipient, &escrow.amount);
+
+        escrow.released = true;
+        escrow.claimed = true;
+        env.storage()
+            .persistent()
+            .set(&(ESCROW_KEY, escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .extend_ttl(&(ESCROW_KEY, escrow_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        inc_counter(&env, &STAT_ESC_RELEASED);
+
+        record_audit(
+            &env,
+            "escrow_dispute_resolved",
+            &arbiter,
+            escrow_id,
+            "Escrow dispute resolved",
+        );
+
+        Ok(())
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -2456,11 +2823,19 @@ impl OphirPayContract {
         let _guard = acquire_reentrancy_lock(&env)?;
         creator.require_auth();
         require_not_paused(&env, PauseScope::Streams)?;
+        validate_memo_text(&metadata)?;
         if total_amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
         if end_time <= start_time {
             return Err(PaymentError::InvalidAmount);
+        }
+        let duration = end_time - start_time;
+        if duration < MIN_STREAM_DURATION {
+            return Err(PaymentError::StreamDurationTooShort);
+        }
+        if duration > MAX_STREAM_DURATION {
+            return Err(PaymentError::StreamDurationTooLong);
         }
 
         // Transfer total amount from creator to contract (reentrancy-guarded, MEDIUM-4)
@@ -2468,7 +2843,7 @@ impl OphirPayContract {
         let contract_addr = env.current_contract_address();
         token_client.transfer(&creator, &contract_addr, &total_amount);
 
-        add_locked(&env, total_amount);
+        add_locked(&env, &asset, total_amount);
 
         let mut count: u64 = env.storage().instance().get(&STREAM_COUNT).unwrap_or(0);
         count += 1;
@@ -2490,6 +2865,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(STREAM_KEY, count), &stream);
+        touch_record_ttl(&env, &(STREAM_KEY, count));
         env.storage()
             .persistent()
             .extend_ttl(&(STREAM_KEY, count), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2562,7 +2938,7 @@ impl OphirPayContract {
         // Transfer claimable amount to recipient (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &stream.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -claimable);
+        add_locked(&env, &stream.asset, -claimable);
 
         token_client.transfer(&contract_addr, &recipient, &claimable);
 
@@ -2570,6 +2946,7 @@ impl OphirPayContract {
         env.storage()
             .persistent()
             .set(&(STREAM_KEY, stream_id), &stream);
+        touch_record_ttl(&env, &(STREAM_KEY, stream_id));
         env.storage()
             .persistent()
             .extend_ttl(&(STREAM_KEY, stream_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2608,17 +2985,36 @@ impl OphirPayContract {
         }
 
         let now = env.ledger().timestamp();
-        let vested = compute_vested(stream.total_amount, stream.start_time, stream.end_time, now);
+        let duration = stream.end_time.saturating_sub(stream.start_time);
+        let vested = if duration == 0 || now >= stream.end_time {
+            stream.total_amount
+        } else if now <= stream.start_time {
+            0
+        } else {
+            compute_vested(stream.total_amount, stream.start_time, stream.end_time, now)
+        };
+
         let earned_unclaimed = vested
             .checked_sub(stream.claimed_amount)
             .ok_or(PaymentError::StreamInvariantViolated)?;
         let unvested = stream.total_amount.saturating_sub(vested);
+
+        // Strict conservation check: claimed + earned_unclaimed + unvested == total_amount
+        if stream
+            .claimed_amount
+            .saturating_add(earned_unclaimed)
+            .saturating_add(unvested)
+            != stream.total_amount
+        {
+            return Err(PaymentError::StreamInvariantViolated);
+        }
 
         stream.cancelled = true;
         stream.claimed_amount = vested;
         env.storage()
             .persistent()
             .set(&(STREAM_KEY, stream_id), &stream);
+        touch_record_ttl(&env, &(STREAM_KEY, stream_id));
         env.storage()
             .persistent()
             .extend_ttl(&(STREAM_KEY, stream_id), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -2627,11 +3023,11 @@ impl OphirPayContract {
         let contract_addr = env.current_contract_address();
         if earned_unclaimed > 0 {
             token_client.transfer(&contract_addr, &stream.recipient, &earned_unclaimed);
-            add_locked(&env, -earned_unclaimed);
+            add_locked(&env, &stream.asset, -earned_unclaimed);
         }
         if unvested > 0 {
             token_client.transfer(&contract_addr, &creator, &unvested);
-            add_locked(&env, -unvested);
+            add_locked(&env, &stream.asset, -unvested);
         }
 
         inc_counter(&env, &STAT_STR_CANCELLED);
@@ -2649,15 +3045,46 @@ impl OphirPayContract {
 
     /// Get a stream by ID
     pub fn get_stream(env: Env, stream_id: u64) -> Result<Stream, PaymentError> {
-        env.storage()
+        let stream: Stream = env.storage()
             .persistent()
             .get(&(STREAM_KEY, stream_id))
-            .ok_or(PaymentError::StreamNotFound)
+            .ok_or(PaymentError::StreamNotFound)?;
+        touch_record_ttl(&env, &(STREAM_KEY, stream_id));
+        Ok(stream)
     }
 
     /// Get stream count
     pub fn get_stream_count(env: Env) -> u64 {
         env.storage().instance().get(&STREAM_COUNT).unwrap_or(0)
+    }
+
+    /// Get stream cancellation split preview: (claimed, earned_unclaimed, unvested).
+    pub fn get_stream_cancel_split(
+        env: Env,
+        stream_id: u64,
+    ) -> Result<(i128, i128, i128), PaymentError> {
+        let stream: Stream = env
+            .storage()
+            .persistent()
+            .get(&(STREAM_KEY, stream_id))
+            .ok_or(PaymentError::StreamNotFound)?;
+
+        let now = env.ledger().timestamp();
+        let duration = stream.end_time.saturating_sub(stream.start_time);
+        let vested = if duration == 0 || now >= stream.end_time {
+            stream.total_amount
+        } else if now <= stream.start_time {
+            0
+        } else {
+            compute_vested(stream.total_amount, stream.start_time, stream.end_time, now)
+        };
+
+        let earned_unclaimed = vested
+            .checked_sub(stream.claimed_amount)
+            .ok_or(PaymentError::StreamInvariantViolated)?;
+        let unvested = stream.total_amount.saturating_sub(vested);
+
+        Ok((stream.claimed_amount, earned_unclaimed, unvested))
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -3339,6 +3766,7 @@ impl OphirPayContract {
     ) -> Result<BatchCreateResult, PaymentError> {
         creator.require_auth();
         require_not_paused(&env, PauseScope::Batches)?;
+        validate_memo_text(&tx_hash)?;
 
         let len = payees.len();
         if len == 0 {

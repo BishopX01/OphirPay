@@ -84,6 +84,7 @@ Complete list of every endpoint declared in [`docs/openapi.yaml`](openapi.yaml).
 | `/api/webhooks/{id}/replay` | POST |
 | `/api/webhooks/{id}/deliveries` | GET |
 | `/api/webhooks/{id}/deliveries/{deliveryId}/redeliver` | POST |
+| `/api/webhooks/{id}/deliveries/requeue` | POST |
 | `/api/keys` | GET, POST, PATCH, DELETE |
 | `/api/keys/stats` | GET |
 | `/api/keys/{id}/rotate` | POST |
@@ -112,6 +113,7 @@ Complete list of every endpoint declared in [`docs/openapi.yaml`](openapi.yaml).
 | `/api/cron` | GET, POST |
 | `/api/jobs/process-due-recurring` | POST |
 | `/api/pause-state` | GET |
+| `/api/openapi.json` | GET |
 
 ---
 
@@ -563,6 +565,25 @@ curl -X POST "https://api.ophirpay.com/api/webhooks" \
 }
 ```
 
+### Requeue Dead-Lettered Webhook Deliveries
+```bash
+curl -X POST "https://api.ophirpay.com/api/webhooks/{id}/deliveries/requeue" \
+  -H "Authorization: Bearer ophir_live_sk_8f7b2c9e4a1d0f62b8e3c1a9" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "statusCodes": [500, 502, 504],
+    "olderThanMs": 60000
+  }'
+```
+**Response (`200 OK`):**
+```json
+{
+  "success": true,
+  "requeuedCount": 3,
+  "webhookId": "wh_019a99824c"
+}
+```
+
 ---
 
 ## 9. Multisig & Governance
@@ -872,3 +893,28 @@ curl -X POST https://api.ophirpay.com/api/csp-report \
     }
   }]'
 ```
+
+---
+
+## 13. OpenAPI Specification
+
+### Fetch OpenAPI Specification (`/api/openapi.json`)
+
+Fetch the machine-readable OpenAPI 3.1.0 JSON document for client generation, API testing, or tooling integration:
+
+```bash
+curl "https://api.ophirpay.com/api/openapi.json"
+```
+
+**Response (`200 OK` - Application/JSON):**
+```json
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OphirPay API",
+    "version": "0.1.0"
+  },
+  "paths": { ... }
+}
+```
+

@@ -49,6 +49,7 @@
 generator client {
   provider = "prisma-client-js"
   binaryTargets = ["native", "debian-openssl-3.0.x"]
+  previewFeatures = ["metrics"]
 }
 
 // ── SQLite (development) ──────────────────────────────────
@@ -576,6 +577,7 @@ enum DeliveryStatus {
   SUCCESS
   FAILED
   DEAD_LETTER
+  PENDING
 }
 
 
@@ -656,6 +658,8 @@ model AuditLog {
 
   /// Speeds up history queries by action/target.
   @@index([action, target])
+  /// Fast keyset cursor pagination index (issue #1361)
+  @@index([createdAt, id])
 }
 
 /// Lifecycle of a Refund row, mirroring the on-chain refund state machine.

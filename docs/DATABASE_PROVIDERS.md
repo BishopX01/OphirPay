@@ -87,6 +87,58 @@ point `DATABASE_URL` at the direct (non-pooled) connection, or first configure
 and validate Prisma's `directUrl` in the schema. Do not assume that merely
 setting `DIRECT_DATABASE_URL` changes the URL used by the current schema.
 
+### Connection Pool Sizing & Telemetry Monitoring (#1371)
+
+Under heavy batch payment processing, webhook delivery storms, or high API traffic, Prisma connection pools can experience starvation if undersized or misconfigured.
+
+#### Recommended Pool Sizing Formula
+To avoid database thrashing and connection exhaustion, size the connection pool using the standard formula:
+```text
+connection_limit = (number_of_cpu_cores * 2) + effective_spindle_count
+```
+Configure pool parameters directly on the PostgreSQL `DATABASE_URL`:
+```text
+DATABASE_URL="postgresql://user:password@host:5432/ophirpay?connection_limit=20&pool_timeout=10&connect_timeout=15"
+```
+- `connection_limit`: Maximum simultaneous connections per application instance (default: `num_cpus * 2 + 1`).
+- `pool_timeout`: Seconds to wait before throwing a connection acquisition timeout (default: `10s`).
+- `connect_timeout`: Seconds to wait to establish a TCP connection with PostgreSQL.
+
+#### Automated Health Monitoring & Telemetry
+Prisma connection pool metrics are exposed to Prometheus at `/api/metrics`:
+- `prisma_pool_connections_busy`: Current active database connections executing queries.
+- `prisma_pool_connections_idle`: Established connections idle and immediately available.
+- `prisma_pool_connections_open`: Total open connections currently maintained by the client.
+- `prisma_pool_wait_duration_ms`: Latency histogram and cumulative time spent waiting to acquire a connection from the pool.
+
+#### High Wait Time Structured Warning Logs
+In `src/lib/prisma.ts`, queries and pool acquisitions exceeding **500ms** automatically trigger structured warning logs:
+```json
+{
+  "timestamp": "2026-10-19T01:23:45.000Z",
+  "level": "warn",
+  "message": "Database connection acquisition or query wait exceeded threshold",
+  "context": {
+    "durationMs": 620,
+    "thresholdMs": 500,
+    "operation": "findMany",
+    "model": "Payment"
+  }
+}
+```
+
+#### Recommended Grafana PromQL Alerts
+Operators can track pool health and exhaustion using the following PromQL queries:
+- **Pool Saturation Percentage**:
+  ```promql
+  (prisma_pool_connections_busy / clamp_min(prisma_pool_connections_open, 1)) * 100
+  ```
+- **Average Connection Acquisition Wait (ms)**:
+  ```promql
+  rate(prisma_pool_wait_duration_ms_sum[5m]) / clamp_min(rate(prisma_pool_wait_duration_ms_count[5m]), 0.001)
+  ```
+- **Alert Condition**: Trigger alert if Pool Saturation > 90% for 3 consecutive minutes or average wait duration exceeds 500ms.
+
 ## Moving data between providers
 
 There is no checked-in cross-provider migration/export tool. `prisma migrate`

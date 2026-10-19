@@ -46,6 +46,7 @@ export type ApiOperationName =
   | "getApiMetrics"
   | "getApiMultisig"
   | "getApiMultisigRequests"
+  | "getApiOpenapiJson"
   | "getApiPauseState"
   | "getApiPayments"
   | "getApiPaymentsExport"
@@ -107,6 +108,7 @@ export type ApiOperationName =
   | "postApiStreams"
   | "postApiWebhooks"
   | "postApiWebhooksIdDeliveriesDeliveryIdRedeliver"
+  | "postApiWebhooksIdDeliveriesRequeue"
   | "postApiWebhooksIdReplay"
   | "postApiWebhooksIdTest";
 

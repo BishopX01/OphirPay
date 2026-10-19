@@ -35,6 +35,8 @@ describe("GET /api/health/live — liveness", () => {
     expect(body.success).toBe(true);
     expect(body.data.status).toBe("ok");
     expect(body.data.probe).toBe("liveness");
+    expect(typeof body.data.version).toBe("string");
+    expect(typeof body.data.commit).toBe("string");
     expect(typeof body.data.uptime).toBe("number");
   });
 

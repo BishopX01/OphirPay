@@ -660,5 +660,25 @@ pub enum PaymentError {
     InvalidPauseScope = 308,
     /// Idempotency key was reused for a different payment payload
     PaymentIdempotencyConflict = 309,
+    // ── Stream Duration Bounds (310-311) ───────────────────
+    /// Stream duration is too short: minimum duration is 60 seconds
+    StreamDurationTooShort = 310,
+    /// Stream duration is too long: maximum duration is 5 years
+    StreamDurationTooLong = 311,
+    // ── Token Decimal Precision (312) ───────────────────────────
+    /// Payment amount violates token decimal precision constraints
+    InvalidDecimalPrecision = 312,
+    // ── Payment Memo Validation (313) ───────────────────────────
+    /// Payment memo exceeds maximum length or contains invalid control characters
+    MemoTooLong = 313,
+    // ── Multisig Configuration Guards (314-315) ─────────────────
+    /// Threshold cannot be zero or exceed signer count
+    InvalidThreshold = 314,
+    /// Signers list cannot be empty
+    EmptySignersList = 315,
+    // ── Dispute Resolution Guards (316) ─────────────────────────
+    /// Dispute cooling-off period is still active
+    DisputeCoolingOffActive = 316,
 }
-
+
+

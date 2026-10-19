@@ -40,6 +40,30 @@ pub fn emit_stream_event(env: &Env, creator: &Address, recipient: &Address, amou
     );
 }
 
+/// Event emitted when fee configuration or collector address is updated (#1349).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FeeConfigUpdated {
+    pub previous_collector: Option<Address>,
+    pub new_collector: Option<Address>,
+    pub previous_payment_fee_bps: u32,
+    pub new_payment_fee_bps: u32,
+    pub previous_escrow_fee_bps: u32,
+    pub new_escrow_fee_bps: u32,
+    pub previous_stream_fee_bps: u32,
+    pub new_stream_fee_bps: u32,
+    pub enabled: bool,
+    pub updated_by: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_fee_config_updated(env: &Env, event: &FeeConfigUpdated) {
+    env.events().publish(
+        (Symbol::new(env, "fee_config"), Symbol::new(env, "updated")),
+        event.clone(),
+    );
+}
+
 /// Increment a u64 counter key by 1. Gas-optimized: single-key read+write
 /// instead of deserializing/serializing an 11-field ContractStats struct.
 /// Note: does NOT extend TTL — callers should batch TTL extensions at the end
@@ -66,15 +90,24 @@ pub fn add_counter(env: &Env, key: &Symbol, delta: i128) {
         .set(key, &val.saturating_add(delta));
 }
 
-/// Track funds locked in active escrows/streams. Pass the actual amount being
-/// deposited (positive) or withdrawn (negative). Used by emergency_withdraw
-/// to prevent the owner from withdrawing user-deposited funds.
-pub fn add_locked(env: &Env, delta: i128) {
-    let val: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
-    let new_val = val.saturating_add(delta);
-    // Clamp at 0 — locked balance must never go negative
-    let clamped = if new_val < 0 { 0 } else { new_val };
-    env.storage().instance().set(&LOCKED_BALANCE, &clamped);
+/// Track funds locked in active escrows/streams/proposals per token asset.
+/// Updates both the token-specific locked balance and the global aggregate.
+pub fn add_locked(env: &Env, token: &Address, delta: i128) {
+    let token_val: i128 = env
+        .storage()
+        .instance()
+        .get(&(LOCKED_BALANCE, token.clone()))
+        .unwrap_or(0);
+    let new_token_val = token_val.saturating_add(delta);
+    let clamped_token = if new_token_val < 0 { 0 } else { new_token_val };
+    env.storage()
+        .instance()
+        .set(&(LOCKED_BALANCE, token.clone()), &clamped_token);
+
+    let global_val: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
+    let new_global_val = global_val.saturating_add(delta);
+    let clamped_global = if new_global_val < 0 { 0 } else { new_global_val };
+    env.storage().instance().set(&LOCKED_BALANCE, &clamped_global);
 }
 
 /// Compute the protocol fee for an amount at the given fee basis points.
@@ -209,6 +242,30 @@ pub fn pause_scope_key(env: &Env, scope: PauseScope) -> Symbol {
 }
 
 /// Whether a single scope is paused, ignoring the global flag.
+/// Map a PauseScope to its corresponding capability bitflag (#1358).
+pub fn scope_to_pause_flag(scope: PauseScope) -> u32 {
+    match scope {
+        PauseScope::Payments => PAUSE_PAYMENTS,
+        PauseScope::Escrows => PAUSE_ESCROWS,
+        PauseScope::Streams => PAUSE_STREAMS,
+        PauseScope::Recurring => PAUSE_RECURRING,
+        PauseScope::Refunds => PAUSE_REFUNDS,
+        PauseScope::Governance => PAUSE_GOVERNANCE,
+        PauseScope::Hooks => PAUSE_HOOKS,
+        PauseScope::Batches => PAUSE_BATCHES,
+    }
+}
+
+/// Guard: reject execution if the contract is globally paused or the given subsystem bitflag is set (#1358).
+pub fn require_subsystem_active(env: &Env, subsystem: u32) -> Result<(), PaymentError> {
+    let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
+    let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+    if globally_paused || (flags & subsystem) != 0 {
+        return Err(PaymentError::ContractPaused);
+    }
+    Ok(())
+}
+
 pub fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
     env.storage()
         .instance()
@@ -221,7 +278,9 @@ pub fn is_scope_flag_set(env: &Env, scope: PauseScope) -> bool {
 /// first so it always overrides the per-scope flags.
 pub fn require_not_paused(env: &Env, scope: PauseScope) -> Result<(), PaymentError> {
     let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
-    if globally_paused || is_scope_flag_set(env, scope) {
+    let flag = scope_to_pause_flag(scope);
+    let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+    if globally_paused || is_scope_flag_set(env, scope) || (flags & flag) != 0 {
         return Err(PaymentError::ContractPaused);
     }
     Ok(())

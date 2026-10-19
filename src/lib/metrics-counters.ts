@@ -36,7 +36,14 @@ const counters = {
    * malformed requests are rejected before reaching this counter.
    */
   csp_violation_reports_total: 0,
+  /** Gauge: Prisma connection pool queue wait duration in seconds (issue #1412). */
+  database_pool_wait_seconds: 0,
 };
+
+/** Set the Prisma connection pool queue wait time in seconds (issue #1412). */
+export function setDatabasePoolWaitSeconds(seconds: number): void {
+  counters.database_pool_wait_seconds = seconds;
+}
 
 export type CspReportDropReason = "rate_limited" | "deduplicated" | "oversized";
 
@@ -193,6 +200,11 @@ export function resetMetricsForTest(): void {
   deliveryAttempts.clear();
   deliveryFinalOutcomes.clear();
   lastRpcFailover = null;
+  rpcRequestsTotal.set("2xx", 0);
+  rpcRequestsTotal.set("5xx", 0);
+  rpcLatencySum = 0;
+  rpcLatencyCount = 0;
+  rpcLatencyBuckets.fill(0);
   for (const reason of ["rate_limited", "deduplicated", "oversized"] as CspReportDropReason[]) {
     cspReportsDropped.set(reason, 0);
   }
@@ -211,6 +223,49 @@ export type StatusClass = "2xx" | "3xx" | "4xx" | "5xx";
 export const LATENCY_BUCKET_BOUNDS = [
   0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
 ];
+
+const rpcRequestsTotal = new Map<string, number>([
+  ["2xx", 0],
+  ["5xx", 0],
+]);
+
+const rpcLatencyBuckets = new Array(LATENCY_BUCKET_BOUNDS.length + 1).fill(0);
+let rpcLatencySum = 0;
+let rpcLatencyCount = 0;
+
+/** Record Soroban RPC request observation (latency and status class) (issue #1412). */
+export function recordRpcObservation(
+  statusClass: "2xx" | "5xx",
+  durationSeconds: number
+): void {
+  rpcRequestsTotal.set(
+    statusClass,
+    (rpcRequestsTotal.get(statusClass) ?? 0) + 1
+  );
+  rpcLatencySum += durationSeconds;
+  rpcLatencyCount += 1;
+  const bucketIndex = LATENCY_BUCKET_BOUNDS.findIndex(
+    (bound) => durationSeconds <= bound
+  );
+  if (bucketIndex === -1) {
+    rpcLatencyBuckets[LATENCY_BUCKET_BOUNDS.length] += 1;
+  } else {
+    rpcLatencyBuckets[bucketIndex] += 1;
+  }
+}
+
+/** Get snapshot of Soroban RPC metrics (issue #1412). */
+export function getRpcMetricsSnapshot() {
+  return {
+    requestsTotal: {
+      "2xx": rpcRequestsTotal.get("2xx") ?? 0,
+      "5xx": rpcRequestsTotal.get("5xx") ?? 0,
+    },
+    latencySum: rpcLatencySum,
+    latencyCount: rpcLatencyCount,
+    buckets: [...rpcLatencyBuckets],
+  };
+}
 
 export interface EndpointObservation {
   requests: number;

@@ -2,7 +2,7 @@
 // GENERATED FROM docs/openapi.yaml — DO NOT EDIT BY HAND.
 // Regenerate with: npm run client:generate
 //
-// 97 operations extracted from the committed OpenAPI spec.
+// 99 operations extracted from the committed OpenAPI spec.
 
 /** @typedef {{ name: string, method: string, path: string, summary: string, tags: string[], requestBody: boolean }} ApiOperation */
 
@@ -345,6 +345,16 @@ export const API_OPERATIONS = [
     "summary": "List pending approval requests",
     "tags": [
       "Multisig"
+    ],
+    "requestBody": false
+  },
+  {
+    "name": "getApiOpenapiJson",
+    "method": "GET",
+    "path": "/api/openapi.json",
+    "summary": "OpenAPI specification in JSON format",
+    "tags": [
+      "Documentation"
     ],
     "requestBody": false
   },
@@ -957,6 +967,16 @@ export const API_OPERATIONS = [
       "Webhooks"
     ],
     "requestBody": false
+  },
+  {
+    "name": "postApiWebhooksIdDeliveriesRequeue",
+    "method": "POST",
+    "path": "/api/webhooks/{id}/deliveries/requeue",
+    "summary": "Requeue dead-lettered webhook deliveries for retry",
+    "tags": [
+      "Webhooks"
+    ],
+    "requestBody": true
   },
   {
     "name": "postApiWebhooksIdReplay",

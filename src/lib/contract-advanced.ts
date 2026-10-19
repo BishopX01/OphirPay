@@ -727,3 +727,97 @@ export async function setScopePaused(
   ];
   return signAndSubmit(caller, CONTRACT_ID, "set_scope_paused", args);
 }
+
+// ── Subsystem Capability Bitflags (#1358) ────────────────────
+export const SUBSYSTEM_FLAGS = {
+  PAUSE_PAYMENTS: 1,
+  PAUSE_ESCROWS: 2,
+  PAUSE_STREAMS: 4,
+  PAUSE_GOVERNANCE: 8,
+  PAUSE_RECURRING: 16,
+  PAUSE_REFUNDS: 32,
+  PAUSE_HOOKS: 64,
+  PAUSE_BATCHES: 128,
+  PAUSE_ALL: 255,
+} as const;
+
+export type SubsystemFlag = (typeof SUBSYSTEM_FLAGS)[keyof typeof SUBSYSTEM_FLAGS];
+
+export const SUBSYSTEM_FLAG_LABELS: Record<number, string> = {
+  [SUBSYSTEM_FLAGS.PAUSE_PAYMENTS]: "Payments",
+  [SUBSYSTEM_FLAGS.PAUSE_ESCROWS]: "Escrows",
+  [SUBSYSTEM_FLAGS.PAUSE_STREAMS]: "Streams",
+  [SUBSYSTEM_FLAGS.PAUSE_GOVERNANCE]: "Governance",
+  [SUBSYSTEM_FLAGS.PAUSE_RECURRING]: "Recurring",
+  [SUBSYSTEM_FLAGS.PAUSE_REFUNDS]: "Refunds",
+  [SUBSYSTEM_FLAGS.PAUSE_HOOKS]: "Hooks",
+  [SUBSYSTEM_FLAGS.PAUSE_BATCHES]: "Batches",
+};
+
+/**
+ * Deconstruct an integer bitmask into its individual active subsystem flags.
+ */
+export function parseSubsystemFlags(flags: number): number[] {
+  const allKnown = [
+    SUBSYSTEM_FLAGS.PAUSE_PAYMENTS,
+    SUBSYSTEM_FLAGS.PAUSE_ESCROWS,
+    SUBSYSTEM_FLAGS.PAUSE_STREAMS,
+    SUBSYSTEM_FLAGS.PAUSE_GOVERNANCE,
+    SUBSYSTEM_FLAGS.PAUSE_RECURRING,
+    SUBSYSTEM_FLAGS.PAUSE_REFUNDS,
+    SUBSYSTEM_FLAGS.PAUSE_HOOKS,
+    SUBSYSTEM_FLAGS.PAUSE_BATCHES,
+  ];
+  return allKnown.filter((flag) => (flags & flag) !== 0);
+}
+
+/**
+ * Read the current subsystem pause flags bitmask on-chain.
+ */
+export async function getSubsystemPauseFlags(sourcePublicKey: string): Promise<number> {
+  const result = await simulateContractCall(
+    CONTRACT_ID,
+    "get_pause_flags",
+    sourcePublicKey,
+  );
+  if (result.status === "SIMULATION_FAILED" || typeof result.returnValue !== "number") {
+    return 0;
+  }
+  return result.returnValue;
+}
+
+/**
+ * Check if a specific subsystem is paused on-chain via bitflag or global pause.
+ */
+export async function isSubsystemPaused(
+  sourcePublicKey: string,
+  subsystem: number,
+): Promise<boolean> {
+  const result = await simulateContractCall(
+    CONTRACT_ID,
+    "is_subsystem_paused",
+    sourcePublicKey,
+    [nativeToScVal(subsystem, { type: "u32" })],
+  );
+  if (result.status === "SIMULATION_FAILED" || typeof result.returnValue !== "boolean") {
+    return false;
+  }
+  return result.returnValue;
+}
+
+/**
+ * Owner-only: pause or resume a specific subsystem on-chain via bitflags.
+ */
+export async function setSubsystemPause(
+  caller: string,
+  subsystem: number,
+  paused: boolean,
+): Promise<ContractCallResult> {
+  const args: xdr.ScVal[] = [
+    nativeToScVal(caller, { type: "address" }),
+    nativeToScVal(subsystem, { type: "u32" }),
+    nativeToScVal(paused, { type: "bool" }),
+  ];
+  return signAndSubmit(caller, CONTRACT_ID, "set_subsystem_pause", args);
+}
+

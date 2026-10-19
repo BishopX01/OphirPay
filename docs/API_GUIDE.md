@@ -22,7 +22,8 @@ endpoints are consistent, secure, and maintainable.
 7. [Rate-limit integration](#7-rate-limit-integration)
 8. [Worked example](#8-worked-example)
 9. [Testing your endpoint](#9-testing-your-endpoint)
-10. [Checklist](#checklist)
+10. [Interactive API Documentation & OpenAPI Explorer](#10-interactive-api-documentation--openapi-explorer)
+11. [Checklist](#checklist)
 
 ---
 
@@ -286,6 +287,37 @@ return successResponse(payment, undefined, 201);            // 201 created
 
 Clients check `success` first; `code` is stable for programmatic handling.
 
+### Keyset & Cursor-Based Pagination (#1361)
+
+For deep collections (such as `/api/audit-log` or enterprise payment lists), offset pagination (`skip`/`take`) causes performance degradation on Postgres. Keyset cursor-based pagination uses indexed columns (`createdAt`, `id`) with `cursor: { id }` and `take: limit + 1`:
+
+```json
+{
+  "success": true,
+  "data": [...],
+  "nextCursor": "cuid_xyz",
+  "hasMore": true,
+  "meta": {
+    "limit": 20,
+    "nextCursor": "cuid_xyz",
+    "hasMore": true
+  }
+}
+```
+
+#### Usage Example (`GET /api/audit-log`)
+- First page (descending order by timestamp):
+  ```bash
+  GET /api/audit-log?source=db&limit=20&order=desc
+  ```
+- Subsequent page using `nextCursor`:
+  ```bash
+  GET /api/audit-log?source=db&limit=20&order=desc&cursor=cuid_xyz
+  ```
+- Directional sorting is supported via `order=asc` or `order=desc`.
+- When `hasMore` is `false`, `nextCursor` resolves to `null`.
+
+
 ---
 
 ## 7. Rate-limit integration
@@ -506,6 +538,21 @@ npm run typecheck   # tsc --noEmit
 npm run lint        # eslint .
 npm test            # vitest run
 ```
+
+---
+
+## 10. Interactive API Documentation & OpenAPI Explorer
+
+OphirPay provides built-in interactive OpenAPI documentation and a live testing playground directly within the application:
+
+- **Interactive Explorer Route**: `/docs/api` (implemented in `src/app/docs/api/page.tsx` and `src/app/docs/api/ApiDocsClient.tsx`).
+- **Raw OpenAPI JSON Spec Route**: `/api/openapi.json` (implemented in `src/app/api/openapi.json/route.ts`).
+- **Committed Specification**: [`docs/openapi.yaml`](./openapi.yaml).
+
+### Key Features
+1. **Interactive "Try It Out"**: Directly test endpoints against Stellar Testnet nodes (`https://soroban-testnet.stellar.org`, `https://horizon-testnet.stellar.org`), local development (`http://localhost:3000`), or production APIs.
+2. **Strict CSP Compliance**: Built with native Next.js App Router components without external script injections or un-nonced inline scripts, strictly complying with the CSP policy in `src/proxy.ts`.
+3. **Automated Drift Protection**: CI guards verify bidirectional conformance (`src/__tests__/openapi-conformance.test.ts`) and ensure all client SDK packages are up to date (`node scripts/generate-api-client.mjs --check`).
 
 ---
 
