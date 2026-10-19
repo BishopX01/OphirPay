@@ -758,7 +758,7 @@ impl OphirPayContract {
             let contract_addr = env.current_contract_address();
             token_client.transfer(&proposer, &contract_addr, &deposit_amount);
             // Track deposit in LOCKED_BALANCE so emergency_withdraw can't drain it
-            add_locked(&env, deposit_amount);
+            add_locked(&env, &deposit_asset, deposit_amount);
         }
 
         let now = env.ledger().timestamp();
@@ -908,7 +908,7 @@ impl OphirPayContract {
             let contract_addr = env.current_contract_address();
             token_client.transfer(&contract_addr, &proposal.proposer, &proposal.deposit_amount);
             // Release deposit from LOCKED_BALANCE now that it's refunded
-            add_locked(&env, -proposal.deposit_amount);
+            add_locked(&env, &proposal.deposit_asset, -proposal.deposit_amount);
         }
 
         env.events().publish(
@@ -1663,6 +1663,14 @@ impl OphirPayContract {
         env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0)
     }
 
+    /// Get the current locked balance for a specific token asset.
+    pub fn get_token_locked_balance(env: Env, asset: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&(LOCKED_BALANCE, asset))
+            .unwrap_or(0)
+    }
+
     /// Check if the reentrancy lock is currently held.
     pub fn is_reentrancy_locked(env: Env) -> bool {
         env.storage()
@@ -1833,11 +1841,15 @@ impl OphirPayContract {
             return Err(PaymentError::NoTokensToWithdraw);
         }
 
-        // INVARIANT: cannot withdraw locked user funds
+        // INVARIANT: cannot withdraw locked user funds for this specific asset
         let token_client = token::Client::new(&env, &asset);
         let contract_addr = env.current_contract_address();
         let contract_balance = token_client.balance(&contract_addr);
-        let locked: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
+        let locked: i128 = env
+            .storage()
+            .instance()
+            .get(&(LOCKED_BALANCE, asset.clone()))
+            .unwrap_or(0);
         let unlocked = contract_balance.saturating_sub(locked);
         if amount > unlocked {
             return Err(PaymentError::NoTokensToWithdraw);
@@ -2216,7 +2228,7 @@ impl OphirPayContract {
         let contract_addr = env.current_contract_address();
         token_client.transfer(&depositor, &contract_addr, &amount);
 
-        add_locked(&env, amount);
+        add_locked(&env, &asset, amount);
 
         let mut count: u64 = env.storage().instance().get(&ESCROW_COUNT).unwrap_or(0);
         count += 1;
@@ -2287,7 +2299,7 @@ impl OphirPayContract {
         // Transfer tokens to beneficiary (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &escrow.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -escrow.amount);
+        add_locked(&env, &escrow.asset, -escrow.amount);
 
         token_client.transfer(&contract_addr, &escrow.beneficiary, &escrow.amount);
 
@@ -2349,7 +2361,7 @@ impl OphirPayContract {
 
         let token_client = token::Client::new(&env, &escrow.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -escrow.amount);
+        add_locked(&env, &escrow.asset, -escrow.amount);
 
         token_client.transfer(&contract_addr, &recipient, &escrow.amount);
 
@@ -2404,7 +2416,7 @@ impl OphirPayContract {
         // Transfer tokens to beneficiary (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &escrow.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -escrow.amount);
+        add_locked(&env, &escrow.asset, -escrow.amount);
 
         token_client.transfer(&contract_addr, &beneficiary, &escrow.amount);
 
@@ -2472,7 +2484,7 @@ impl OphirPayContract {
         let contract_addr = env.current_contract_address();
         token_client.transfer(&creator, &contract_addr, &total_amount);
 
-        add_locked(&env, total_amount);
+        add_locked(&env, &asset, total_amount);
 
         let mut count: u64 = env.storage().instance().get(&STREAM_COUNT).unwrap_or(0);
         count += 1;
@@ -2566,7 +2578,7 @@ impl OphirPayContract {
         // Transfer claimable amount to recipient (reentrancy-guarded, MEDIUM-4)
         let token_client = token::Client::new(&env, &stream.asset);
         let contract_addr = env.current_contract_address();
-        add_locked(&env, -claimable);
+        add_locked(&env, &stream.asset, -claimable);
 
         token_client.transfer(&contract_addr, &recipient, &claimable);
 
@@ -2631,11 +2643,11 @@ impl OphirPayContract {
         let contract_addr = env.current_contract_address();
         if earned_unclaimed > 0 {
             token_client.transfer(&contract_addr, &stream.recipient, &earned_unclaimed);
-            add_locked(&env, -earned_unclaimed);
+            add_locked(&env, &stream.asset, -earned_unclaimed);
         }
         if unvested > 0 {
             token_client.transfer(&contract_addr, &creator, &unvested);
-            add_locked(&env, -unvested);
+            add_locked(&env, &stream.asset, -unvested);
         }
 
         inc_counter(&env, &STAT_STR_CANCELLED);

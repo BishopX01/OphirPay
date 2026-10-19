@@ -66,15 +66,24 @@ pub fn add_counter(env: &Env, key: &Symbol, delta: i128) {
         .set(key, &val.saturating_add(delta));
 }
 
-/// Track funds locked in active escrows/streams. Pass the actual amount being
-/// deposited (positive) or withdrawn (negative). Used by emergency_withdraw
-/// to prevent the owner from withdrawing user-deposited funds.
-pub fn add_locked(env: &Env, delta: i128) {
-    let val: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
-    let new_val = val.saturating_add(delta);
-    // Clamp at 0 — locked balance must never go negative
-    let clamped = if new_val < 0 { 0 } else { new_val };
-    env.storage().instance().set(&LOCKED_BALANCE, &clamped);
+/// Track funds locked in active escrows/streams/proposals per token asset.
+/// Updates both the token-specific locked balance and the global aggregate.
+pub fn add_locked(env: &Env, token: &Address, delta: i128) {
+    let token_val: i128 = env
+        .storage()
+        .instance()
+        .get(&(LOCKED_BALANCE, token.clone()))
+        .unwrap_or(0);
+    let new_token_val = token_val.saturating_add(delta);
+    let clamped_token = if new_token_val < 0 { 0 } else { new_token_val };
+    env.storage()
+        .instance()
+        .set(&(LOCKED_BALANCE, token.clone()), &clamped_token);
+
+    let global_val: i128 = env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0);
+    let new_global_val = global_val.saturating_add(delta);
+    let clamped_global = if new_global_val < 0 { 0 } else { new_global_val };
+    env.storage().instance().set(&LOCKED_BALANCE, &clamped_global);
 }
 
 /// Compute the protocol fee for an amount at the given fee basis points.

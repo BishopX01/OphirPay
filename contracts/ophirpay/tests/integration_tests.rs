@@ -972,3 +972,64 @@ fn test_multisig_config_threshold_and_empty_signers_validation() {
     assert_eq!(cfg.signers.len(), 2);
     assert!(cfg.enabled);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MULTI-TOKEN BALANCE INTEGRITY IN EMERGENCY WITHDRAW (#1354)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_multi_token_locked_balance_integrity_in_emergency_withdraw() {
+    let fix = TestFixture::new();
+
+    // Create a second token contract (Token B)
+    let token_b_admin = Address::generate(&fix.env);
+    let token_b_id = fix.env.register_stellar_asset_contract(token_b_admin.clone());
+    let token_b_admin_client = token::StellarAssetClient::new(&fix.env, &token_b_id);
+
+    let depositor = Address::generate(&fix.env);
+    let beneficiary = Address::generate(&fix.env);
+
+    // Mint 100,000 of Token A and 100,000 of Token B to depositor
+    fix.mint(&depositor, 100_000);
+    token_b_admin_client.mint(&depositor, &100_000);
+
+    // Mint surplus directly to contract address (simulating accumulated fees)
+    fix.mint(&fix.contract_id, 50_000);
+    token_b_admin_client.mint(&fix.contract_id, &50_000);
+
+    // Create an escrow locking 40,000 of Token A
+    let now = fix.env.ledger().timestamp();
+    let escrow_id = fix.client.create_escrow(
+        &depositor,
+        &beneficiary,
+        &Option::<Address>::None,
+        &40_000i128,
+        &fix.token_id,
+        &(now + 86_400),
+        &String::from_str(&fix.env, "escrow_token_a"),
+    );
+    assert_eq!(escrow_id, 1);
+
+    // Verify per-token locked balances
+    assert_eq!(fix.client.get_token_locked_balance(&fix.token_id), 40_000);
+    assert_eq!(fix.client.get_token_locked_balance(&token_b_id), 0);
+    assert_eq!(fix.client.get_locked_balance(), 40_000);
+
+    // Contract has 90,000 Token A (40,000 locked + 50,000 surplus)
+    // Attempting to withdraw 60,000 Token A fails because unlocked = 90,000 - 40,000 = 50,000
+    let res_drain_a = fix.client.try_emergency_withdraw(&fix.owner, &fix.token_id, &60_000i128);
+    assert_eq!(res_drain_a, Err(Ok(PaymentError::NoTokensToWithdraw)));
+
+    // Withdrawing the allowable 50,000 Token A succeeds
+    let res_ok_a = fix.client.try_emergency_withdraw(&fix.owner, &fix.token_id, &50_000i128);
+    assert!(res_ok_a.is_ok());
+
+    // Token B has 50,000 surplus and 0 locked obligations. Withdrawing all 50,000 Token B succeeds
+    let res_ok_b = fix.client.try_emergency_withdraw(&fix.owner, &token_b_id, &50_000i128);
+    assert!(res_ok_b.is_ok());
+
+    // Token A locked balance is still completely protected at 40,000
+    assert_eq!(fix.client.get_token_locked_balance(&fix.token_id), 40_000);
+    let token_a_client = token::Client::new(&fix.env, &fix.token_id);
+    assert_eq!(token_a_client.balance(&fix.contract_id), 40_000);
+}
