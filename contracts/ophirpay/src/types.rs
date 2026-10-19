@@ -53,7 +53,10 @@ pub struct Escrow {
     pub released: bool,
     pub claimed: bool,
     pub metadata: String,
+    pub dispute_initiated_at: u64,
 }
+
+pub type EscrowRecord = Escrow;
 
 /// A payment stream that vests tokens over time.
 #[contracttype]

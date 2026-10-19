@@ -669,4 +669,4 @@ pub enum PaymentError {
     /// Payment amount violates token decimal precision constraints
     InvalidDecimalPrecision = 312,
 }
-
+
