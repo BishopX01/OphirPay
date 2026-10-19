@@ -44,11 +44,11 @@ describe("Dead-Letter Queue (DLQ) Requeue Helpers", () => {
   it("requeueWebhookDelivery resets attempt count and sets status to PENDING", async () => {
     mockPrismaDelivery.update.mockResolvedValue({
       id: "del_1",
-      status: "PENDING" as any,
+      status: "PENDING" as unknown as never,
       attempts: 0,
       eventId: "evt_1",
       webhookId: "wh_1",
-    } as any);
+    } as unknown as never);
 
     const result = await requeueWebhookDelivery("del_1");
 
@@ -78,8 +78,8 @@ describe("Dead-Letter Queue (DLQ) Requeue Helpers", () => {
     mockPrismaDelivery.findMany.mockResolvedValue([
       { id: "del_10", eventId: "evt_10" },
       { id: "del_11", eventId: "evt_11" },
-    ] as any);
-    mockPrismaDelivery.updateMany.mockResolvedValue({ count: 2 } as any);
+    ] as unknown as never);
+    mockPrismaDelivery.updateMany.mockResolvedValue({ count: 2 } as unknown as never);
 
     const result = await bulkRequeueDlqDeliveries("wh_1", {
       statusCodes: [500, 502],
@@ -128,8 +128,8 @@ describe("Dead-Letter Queue (DLQ) Requeue Helpers", () => {
 describe("GET /api/webhooks/[id]/deliveries DLQ queries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetAuth.mockResolvedValue({ userId: "user_1" } as any);
-    mockPrismaWebhook.findFirst.mockResolvedValue({ id: "wh_1" } as any);
+    mockGetAuth.mockResolvedValue({ userId: "user_1" } as unknown as never);
+    mockPrismaWebhook.findFirst.mockResolvedValue({ id: "wh_1" } as unknown as never);
   });
 
   it("filters deliveries by status and statusCode", async () => {
@@ -147,7 +147,7 @@ describe("GET /api/webhooks/[id]/deliveries DLQ queries", () => {
           timestamp: new Date("2026-10-18T09:59:00Z"),
         },
       },
-    ] as any);
+    ] as unknown as never);
 
     const req = new Request(
       "http://localhost/api/webhooks/wh_1/deliveries?status=DEAD_LETTER&statusCode=504"
@@ -188,7 +188,7 @@ describe("POST /api/webhooks/[id]/deliveries/requeue", () => {
   });
 
   it("returns 400 if webhook is not found", async () => {
-    mockGetAuth.mockResolvedValue({ userId: "user_1" } as any);
+    mockGetAuth.mockResolvedValue({ userId: "user_1" } as unknown as never);
     mockPrismaWebhook.findFirst.mockResolvedValue(null);
 
     const req = new Request(
@@ -200,11 +200,11 @@ describe("POST /api/webhooks/[id]/deliveries/requeue", () => {
   });
 
   it("returns 403 if webhook is inactive", async () => {
-    mockGetAuth.mockResolvedValue({ userId: "user_1" } as any);
+    mockGetAuth.mockResolvedValue({ userId: "user_1" } as unknown as never);
     mockPrismaWebhook.findFirst.mockResolvedValue({
       id: "wh_1",
       isActive: false,
-    } as any);
+    } as unknown as never);
 
     const req = new Request(
       "http://localhost/api/webhooks/wh_1/deliveries/requeue",
@@ -215,15 +215,15 @@ describe("POST /api/webhooks/[id]/deliveries/requeue", () => {
   });
 
   it("successfully requeues matching DLQ deliveries", async () => {
-    mockGetAuth.mockResolvedValue({ userId: "user_1" } as any);
+    mockGetAuth.mockResolvedValue({ userId: "user_1" } as unknown as never);
     mockPrismaWebhook.findFirst.mockResolvedValue({
       id: "wh_1",
       isActive: true,
-    } as any);
+    } as unknown as never);
     mockPrismaDelivery.findMany.mockResolvedValue([
       { id: "del_1", eventId: "evt_1" },
-    ] as any);
-    mockPrismaDelivery.updateMany.mockResolvedValue({ count: 1 } as any);
+    ] as unknown as never);
+    mockPrismaDelivery.updateMany.mockResolvedValue({ count: 1 } as unknown as never);
 
     const req = new Request(
       "http://localhost/api/webhooks/wh_1/deliveries/requeue",
