@@ -318,9 +318,9 @@ export const CONTRACT_ERROR_MAP: Record<string, string> = {
   "307": "Stream accounting invariant violated: refused to pay an inconsistent amount",
   "308": "Pause scope not recognized: unknown scope identifier",
   "309": "Idempotency key was reused for a different payment payload",
-  "310": "Threshold cannot be zero or exceed signer count",
-  "311": "Signers list cannot be empty",
-  "312": "Dispute cooling-off period is still active",
+  "310": "Stream duration is too short: minimum duration is 60 seconds",
+  "311": "Stream duration is too long: maximum duration is 5 years",
+  "312": "Payment amount violates token decimal precision constraints",
 };
 
 /**

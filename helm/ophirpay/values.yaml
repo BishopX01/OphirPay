@@ -39,9 +39,12 @@ podAnnotations:
 
 podSecurityContext:
   fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 1001
   capabilities:
@@ -91,6 +94,24 @@ pdb:
 
 networkPolicy:
   enabled: true
+  # Prometheus scraping ingress configuration (issue #1344).
+  # Allows Prometheus scrapers from the monitoring namespace to reach the metrics endpoint.
+  metrics:
+    enabled: true
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+    podSelector: {}
+  # Egress configuration for Redis and custom backing services (issue #1345).
+  redis:
+    enabled: true
+    port: 6379
+    # Target namespace / pod selectors for Redis (optional; empty allows any in-cluster Redis on port 6379).
+    namespaceSelector: {}
+    podSelector: {}
+  egress:
+    # Additional TCP ports to allow for custom egress destinations.
+    extraPorts: []
 
 # ── Runtime configuration (rendered into a ConfigMap) ──────────
 # Every key here must be a real variable documented in `.env.example`;

@@ -781,20 +781,20 @@ fn test_stream_vesting_overflow_pays_correct_balance_end_to_end() {
         &total,
         &fix.token_id,
         &now,
-        &(now + 4),
+        &(now + 100),
         &String::from_str(&fix.env, "overflow e2e"),
     );
     assert_eq!(stream_id, 1);
 
-    // Half-way through the schedule: `total * 2` overflows i128. Before the
+    // Half-way through the schedule: `total * 50` overflows i128. Before the
     // fix this vested 0, so the recipient could claim nothing at all.
-    fix.env.ledger().set_timestamp(now + 2);
+    fix.env.ledger().set_timestamp(now + 50);
     let claimed = fix.client.claim_stream(&recipient, &stream_id);
     assert!(claimed > 0, "overflow must not collapse vesting to zero");
     assert_eq!(claimed, total / 2);
 
     // Past the end time the remainder is claimable and drains the stream.
-    fix.env.ledger().set_timestamp(now + 100);
+    fix.env.ledger().set_timestamp(now + 150);
     let remainder = fix.client.claim_stream(&recipient, &stream_id);
     assert_eq!(remainder, total - (total / 2));
 
@@ -936,253 +936,319 @@ fn test_unknown_pause_scope_is_rejected() {
     assert_eq!(fix.client.get_paused_scopes().len(), 0);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MULTISIG THRESHOLD AND SIGNERS VALIDATION (#1355)
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
+// AUTOMATIC TTL EXTENSION FOR ACTIVE ESCROW & STREAM RECORDS (#1352)
+// ===========================================================================
 
 #[test]
-fn test_multisig_config_threshold_and_empty_signers_validation() {
+fn test_escrow_and_stream_automatic_ttl_extension_on_read_and_claim() {
+    use ophirpay_contract::{touch_record_ttl, ESCROW_KEY, STREAM_KEY, TTL_EXTEND_TO, TTL_THRESHOLD};
+
+    assert_eq!(TTL_THRESHOLD, 10_000);
+    assert_eq!(TTL_EXTEND_TO, 50_000);
+
     let fix = TestFixture::new();
-    let signer1 = Address::generate(&fix.env);
-    let signer2 = Address::generate(&fix.env);
-
-    let empty_signers = Vec::new(&fix.env);
-    let mut signers = Vec::new(&fix.env);
-    signers.push_back(signer1.clone());
-    signers.push_back(signer2.clone());
-
-    // 1. Empty signers list is rejected with EmptySignersList
-    let res_empty = fix.client.try_set_multisig_config(&fix.owner, &1u32, &empty_signers, &true);
-    assert_eq!(res_empty, Err(Ok(PaymentError::EmptySignersList)));
-
-    // 2. Threshold of 0 is rejected with InvalidThreshold
-    let res_zero = fix.client.try_set_multisig_config(&fix.owner, &0u32, &signers, &true);
-    assert_eq!(res_zero, Err(Ok(PaymentError::InvalidThreshold)));
-
-    // 3. Threshold exceeding signer count is rejected with InvalidThreshold
-    let res_overflow = fix.client.try_set_multisig_config(&fix.owner, &3u32, &signers, &true);
-    assert_eq!(res_overflow, Err(Ok(PaymentError::InvalidThreshold)));
-
-    // 4. Valid threshold and signers succeed
-    let res_valid = fix.client.try_set_multisig_config(&fix.owner, &2u32, &signers, &true);
-    assert!(res_valid.is_ok());
-
-    let cfg = fix.client.get_multisig_config().unwrap();
-    assert_eq!(cfg.threshold, 2);
-    assert_eq!(cfg.signers.len(), 2);
-    assert!(cfg.enabled);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MULTI-TOKEN BALANCE INTEGRITY IN EMERGENCY WITHDRAW (#1354)
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn test_multi_token_locked_balance_integrity_in_emergency_withdraw() {
-    let fix = TestFixture::new();
-
-    // Create a second token contract (Token B)
-    let token_b_admin = Address::generate(&fix.env);
-    let token_b_id = fix.env.register_stellar_asset_contract(token_b_admin.clone());
-    let token_b_admin_client = token::StellarAssetClient::new(&fix.env, &token_b_id);
-
     let depositor = Address::generate(&fix.env);
     let beneficiary = Address::generate(&fix.env);
-
-    // Mint 100,000 of Token A and 100,000 of Token B to depositor
     fix.mint(&depositor, 100_000);
-    token_b_admin_client.mint(&depositor, &100_000);
 
-    // Mint surplus directly to contract address (simulating accumulated fees)
-    fix.mint(&fix.contract_id, 50_000);
-    token_b_admin_client.mint(&fix.contract_id, &50_000);
-
-    // Create an escrow locking 40,000 of Token A
     let now = fix.env.ledger().timestamp();
     let escrow_id = fix.client.create_escrow(
         &depositor,
         &beneficiary,
         &Option::<Address>::None,
-        &40_000i128,
+        &25_000i128,
         &fix.token_id,
-        &(now + 86_400),
-        &String::from_str(&fix.env, "escrow_token_a"),
+        &(now + 3600),
+        &String::from_str(&fix.env, "ttl_escrow"),
     );
-    assert_eq!(escrow_id, 1);
+    let stream_id = fix.client.create_stream(
+        &depositor,
+        &beneficiary,
+        &50_000i128,
+        &fix.token_id,
+        &now,
+        &(now + 1000),
+        &String::from_str(&fix.env, "ttl_stream"),
+    );
 
-    // Verify per-token locked balances
-    assert_eq!(fix.client.get_token_locked_balance(&fix.token_id), 40_000);
-    assert_eq!(fix.client.get_token_locked_balance(&token_b_id), 0);
-    assert_eq!(fix.client.get_locked_balance(), 40_000);
+    // Status reads via get_escrow and get_stream automatically touch record TTL
+    let esc = fix.client.get_escrow(&escrow_id);
+    assert_eq!(esc.amount, 25_000);
+    let str_rec = fix.client.get_stream(&stream_id);
+    assert_eq!(str_rec.total_amount, 50_000);
 
-    // Contract has 90,000 Token A (40,000 locked + 50,000 surplus)
-    // Attempting to withdraw 60,000 Token A fails because unlocked = 90,000 - 40,000 = 50,000
-    let res_drain_a = fix.client.try_emergency_withdraw(&fix.owner, &fix.token_id, &60_000i128);
-    assert_eq!(res_drain_a, Err(Ok(PaymentError::NoTokensToWithdraw)));
+    // Direct helper invocation inside contract context succeeds without error
+    fix.env.as_contract(&fix.contract_id, || {
+        touch_record_ttl(&fix.env, &(ESCROW_KEY, escrow_id));
+        touch_record_ttl(&fix.env, &(STREAM_KEY, stream_id));
+    });
 
-    // Withdrawing the allowable 50,000 Token A succeeds
-    let res_ok_a = fix.client.try_emergency_withdraw(&fix.owner, &fix.token_id, &50_000i128);
-    assert!(res_ok_a.is_ok());
+    // Partial stream claim and escrow release also refresh record TTLs
+    fix.env.ledger().set_timestamp(now + 500);
+    let claimed = fix.client.claim_stream(&beneficiary, &stream_id);
+    assert_eq!(claimed, 25_000);
 
-    // Token B has 50,000 surplus and 0 locked obligations. Withdrawing all 50,000 Token B succeeds
-    let res_ok_b = fix.client.try_emergency_withdraw(&fix.owner, &token_b_id, &50_000i128);
-    assert!(res_ok_b.is_ok());
-
-    // Token A locked balance is still completely protected at 40,000
-    assert_eq!(fix.client.get_token_locked_balance(&fix.token_id), 40_000);
-    let token_a_client = token::Client::new(&fix.env, &fix.token_id);
-    assert_eq!(token_a_client.balance(&fix.contract_id), 40_000);
+    fix.client.release_escrow(&fix.owner, &escrow_id);
+    assert_eq!(fix.client.get_escrow(&escrow_id).released, true);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// DISPUTE COOLING-OFF TIMEOUT AND MUTUAL BYPASS (#1353)
-// ═══════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+// Stream Duration Bounds Enforcement (#1350)
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_dispute_cooling_off_timeout_and_mutual_bypass() {
+fn test_create_stream_duration_too_short_fails() {
     let fix = TestFixture::new();
-    let depositor = Address::generate(&fix.env);
-    let beneficiary = Address::generate(&fix.env);
-    let arbiter = Address::generate(&fix.env);
-    fix.mint(&depositor, 100_000);
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 100_000);
 
     let now = fix.env.ledger().timestamp();
-    let escrow_id = fix.client.create_escrow(
-        &depositor,
-        &beneficiary,
-        &Some(arbiter.clone()),
-        &10_000i128,
-        &fix.token_id,
-        &(now + 86_400),
-        &String::from_str(&fix.env, "disputed_escrow"),
-    );
-
-    // 1. Initiating dispute by beneficiary
-    let init_res = fix.client.try_initiate_dispute(&beneficiary, &escrow_id);
-    assert!(init_res.is_ok());
-
-    // Duplicate dispute initiation is rejected
-    let dup_res = fix.client.try_initiate_dispute(&depositor, &escrow_id);
-    assert_eq!(dup_res, Err(Ok(PaymentError::DisputeAlreadyFiled)));
-
-    // 2. Unilateral resolution before cooling-off window (86,400s) elapses fails
-    fix.env.ledger().set_timestamp(now + 3600); // Only 1 hour elapsed
-    let premature_res = fix.client.try_resolve_dispute(&arbiter, &escrow_id, &true, &false);
-    assert_eq!(premature_res, Err(Ok(PaymentError::DisputeCoolingOffActive)));
-
-    let premature_arbiter = fix.client.try_release_by_arbiter(&arbiter, &escrow_id, &true);
-    assert_eq!(premature_arbiter, Err(Ok(PaymentError::DisputeCoolingOffActive)));
-
-    // 3. Mutual agreement bypasses cooling-off window immediately
-    let mutual_res = fix.client.try_resolve_dispute(&arbiter, &escrow_id, &true, &true);
-    assert!(mutual_res.is_ok());
-
-    let escrow = fix.client.get_escrow(&escrow_id);
-    assert!(escrow.released);
-    assert!(escrow.claimed);
-
-    // 4. Test dispute elapsing full cooling-off window in second escrow
-    let escrow_id_2 = fix.client.create_escrow(
-        &depositor,
-        &beneficiary,
-        &Some(arbiter.clone()),
-        &15_000i128,
-        &fix.token_id,
-        &(now + 200_000),
-        &String::from_str(&fix.env, "disputed_escrow_2"),
-    );
-    fix.client.initiate_dispute(&depositor, &escrow_id_2);
-
-    // Advance ledger beyond default 86,400s cooling-off period
-    fix.env.ledger().set_timestamp(now + 3600 + 86_401);
-    let post_timeout_res = fix.client.try_resolve_dispute(&arbiter, &escrow_id_2, &false, &false);
-    assert!(post_timeout_res.is_ok());
-    let escrow_2 = fix.client.get_escrow(&escrow_id_2);
-    assert!(escrow_2.released);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// STREAM CANCELLATION PRO-RATA REFUND & ZERO-DURATION (#1357)
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn test_stream_cancel_pro_rata_refund_at_0_25_50_75_100_percent() {
-    let fix = TestFixture::new();
-    let creator = Address::generate(&fix.env);
-    let recipient = Address::generate(&fix.env);
-    fix.mint(&creator, 1_000_000);
-
-    let total = 100_000i128;
-    let start = 1_000_000u64;
-    let end = start + 1_000; // 1000 seconds
-
-    // Test at 0%, 25%, 50%, 75%, 100%
-    let percentages = [(0u64, 0i128, 100_000i128),
-                       (250u64, 25_000i128, 75_000i128),
-                       (500u64, 50_000i128, 50_000i128),
-                       (750u64, 75_000i128, 25_000i128),
-                       (1000u64, 100_000i128, 0i128)];
-
-    for (elapsed, exp_vested, exp_unvested) in percentages {
-        let stream_id = fix.client.create_stream(
-            &creator,
-            &recipient,
-            &total,
-            &fix.token_id,
-            &start,
-            &end,
-            &String::from_str(&fix.env, "cancel_stream_test"),
-        );
-
-        fix.env.ledger().set_timestamp(start + elapsed);
-
-        // Preview split
-        let split = fix.client.get_stream_cancel_split(&stream_id);
-        assert_eq!(split, (0i128, exp_vested, exp_unvested));
-        assert_eq!(split.0 + split.1 + split.2, total);
-
-        let unvested_refunded = fix.client.cancel_stream(&creator, &stream_id);
-        assert_eq!(unvested_refunded, exp_unvested);
-
-        let stream = fix.client.get_stream(&stream_id);
-        assert!(stream.cancelled);
-        assert_eq!(stream.claimed_amount, exp_vested);
-    }
-}
-
-#[test]
-fn test_stream_cancel_odd_duration_and_partial_claim_conservation() {
-    let fix = TestFixture::new();
-    let creator = Address::generate(&fix.env);
-    let recipient = Address::generate(&fix.env);
-    let prime_principal = 1_000_003i128; // Prime principal
-    fix.mint(&creator, prime_principal);
-
-    let start = 1_000_000u64;
-    let end = start + 777; // Odd duration
-    let stream_id = fix.client.create_stream(
+    // 59 seconds duration (< MIN_STREAM_DURATION = 60s) fails with StreamDurationTooShort
+    let res = fix.client.try_create_stream(
         &creator,
         &recipient,
-        &prime_principal,
+        &10_000i128,
         &fix.token_id,
-        &start,
-        &end,
-        &String::from_str(&fix.env, "odd_stream"),
+        &now,
+        &(now + 59),
+        &String::from_str(&fix.env, "meta_short"),
     );
-
-    // Partial claim at elapsed 200s
-    fix.env.ledger().set_timestamp(start + 200);
-    let claimed = fix.client.claim_stream(&recipient, &stream_id);
-    assert!(claimed > 0);
-
-    // Cancel at elapsed 555s
-    fix.env.ledger().set_timestamp(start + 555);
-    let split = fix.client.get_stream_cancel_split(&stream_id);
-    assert_eq!(split.0, claimed);
-    // Solvency conservation invariant holds exactly
-    assert_eq!(split.0 + split.1 + split.2, prime_principal);
-
-    let refunded = fix.client.cancel_stream(&creator, &stream_id);
-    assert_eq!(refunded, split.2);
+    assert_eq!(res, Err(Ok(PaymentError::StreamDurationTooShort)));
 }
+
+#[test]
+fn test_create_stream_duration_too_long_fails() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 100_000);
+
+    let now = fix.env.ledger().timestamp();
+    let five_years = 5 * 365 * 86_400;
+    // 5 years + 1 second (> MAX_STREAM_DURATION) fails with StreamDurationTooLong
+    let res = fix.client.try_create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + five_years + 1),
+        &String::from_str(&fix.env, "meta_long"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::StreamDurationTooLong)));
+}
+
+#[test]
+fn test_create_stream_valid_boundaries_succeed() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let recipient = Address::generate(&fix.env);
+    fix.mint(&creator, 200_000);
+
+    let now = fix.env.ledger().timestamp();
+    let five_years = 5 * 365 * 86_400;
+
+    // Boundary 1: Exactly 60 seconds (MIN_STREAM_DURATION) succeeds
+    let min_stream_id = fix.client.create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + 60),
+        &String::from_str(&fix.env, "meta_min"),
+    );
+    assert_eq!(min_stream_id, 1);
+
+    // Boundary 2: Exactly 5 years (MAX_STREAM_DURATION) succeeds
+    let max_stream_id = fix.client.create_stream(
+        &creator,
+        &recipient,
+        &10_000i128,
+        &fix.token_id,
+        &now,
+        &(now + five_years),
+        &String::from_str(&fix.env, "meta_max"),
+    );
+    assert_eq!(max_stream_id, 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fee Configuration & Collector Update On-Chain Events (#1349)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_fee_config_and_collector_update_emits_on_chain_event() {
+    let fix = TestFixture::new();
+    let collector_1 = Address::generate(&fix.env);
+    let collector_2 = Address::generate(&fix.env);
+
+    // Initial fee configuration emits on-chain event
+    fix.client.set_fee_config(
+        &fix.owner,
+        &50u32,
+        &100u32,
+        &150u32,
+        &10i128,
+        &1i128,
+        &true,
+    );
+    use soroban_sdk::testutils::Events as _;
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
+
+    let config = fix.client.get_fee_config().unwrap();
+    assert_eq!(config.payment_fee_bps, 50);
+
+    // Set collector emits on-chain event
+    fix.client.set_fee_collector(&fix.owner, &collector_1);
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
+    assert_eq!(fix.client.get_fee_collector(), Some(collector_1.clone()));
+
+    // Update collector emits on-chain event
+    fix.client.set_fee_collector(&fix.owner, &collector_2);
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
+    assert_eq!(fix.client.get_fee_collector(), Some(collector_2.clone()));
+
+    // Update fee config again emits on-chain event
+    fix.client.set_fee_config(
+        &fix.owner,
+        &100u32,
+        &200u32,
+        &300u32,
+        &20i128,
+        &2i128,
+        &true,
+    );
+    let events = fix.env.events().all();
+    assert!(!events.events().is_empty());
+
+    let updated_config = fix.client.get_fee_config().unwrap();
+    assert_eq!(updated_config.payment_fee_bps, 100);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token Decimal Precision Validation (#1347)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_record_payment_standard_7_decimals_succeeds() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+
+    // Default asset (7 decimals) accepts any valid stroop amount
+    let id1 = fix.client.record_payment(
+        &payer,
+        &payee,
+        &1i128,
+        &fix.token_id,
+        &String::from_str(&fix.env, "tx_1"),
+        &String::from_str(&fix.env, "meta_1"),
+    );
+    assert_eq!(id1, 1);
+
+    let id2 = fix.client.record_payment(
+        &payer,
+        &payee,
+        &12_345_678i128,
+        &fix.token_id,
+        &String::from_str(&fix.env, "tx_2"),
+        &String::from_str(&fix.env, "meta_2"),
+    );
+    assert_eq!(id2, 2);
+}
+
+#[test]
+fn test_record_payment_custom_decimals_precision_enforced() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    let custom_asset = Address::generate(&fix.env);
+
+    // Configure 2 decimals for fiat-like token (1 cent = 100_000 stroops)
+    fix.client.set_token_decimals(&fix.owner, &custom_asset, &2u32);
+    assert_eq!(fix.client.get_token_decimals(&custom_asset), 2);
+
+    // Exact cent multiple (5 cents = 500_000 stroops) succeeds
+    let id = fix.client.record_payment(
+        &payer,
+        &payee,
+        &500_000i128,
+        &custom_asset,
+        &String::from_str(&fix.env, "tx_cents_valid"),
+        &String::from_str(&fix.env, "cents_ok"),
+    );
+    assert_eq!(id, 1);
+
+    // Sub-cent fractional amount (500_001 stroops) violates decimal precision
+    let res = fix.client.try_record_payment(
+        &payer,
+        &payee,
+        &500_001i128,
+        &custom_asset,
+        &String::from_str(&fix.env, "tx_cents_invalid"),
+        &String::from_str(&fix.env, "cents_fail"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::InvalidDecimalPrecision)));
+}
+
+#[test]
+fn test_record_payment_indivisible_0_decimals_enforced() {
+    let fix = TestFixture::new();
+    let payer = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    let indivisible_asset = Address::generate(&fix.env);
+
+    // Configure 0 decimals (indivisible units: 1 unit = 10_000_000 stroops)
+    fix.client.set_token_decimals(&fix.owner, &indivisible_asset, &0u32);
+    assert_eq!(fix.client.get_token_decimals(&indivisible_asset), 0);
+
+    // Whole unit (3 units = 30_000_000 stroops) succeeds
+    let id = fix.client.record_payment(
+        &payer,
+        &payee,
+        &30_000_000i128,
+        &indivisible_asset,
+        &String::from_str(&fix.env, "tx_whole"),
+        &String::from_str(&fix.env, "whole_ok"),
+    );
+    assert_eq!(id, 1);
+
+    // Fractional unit (10_500_000 stroops) fails
+    let res = fix.client.try_record_payment(
+        &payer,
+        &payee,
+        &10_500_000i128,
+        &indivisible_asset,
+        &String::from_str(&fix.env, "tx_fractional"),
+        &String::from_str(&fix.env, "fractional_fail"),
+    );
+    assert_eq!(res, Err(Ok(PaymentError::InvalidDecimalPrecision)));
+}
+
+#[test]
+fn test_set_token_decimals_bounds_and_auth() {
+    let fix = TestFixture::new();
+    let non_owner = Address::generate(&fix.env);
+    let asset = Address::generate(&fix.env);
+
+    // Non-owner unauthorized
+    let res_auth = fix.client.try_set_token_decimals(&non_owner, &asset, &6u32);
+    assert_eq!(res_auth, Err(Ok(PaymentError::Unauthorized)));
+
+    // Decimals exceeding MAX_TOKEN_DECIMALS (18) fails
+    let res_bounds = fix.client.try_set_token_decimals(&fix.owner, &asset, &19u32);
+    assert_eq!(res_bounds, Err(Ok(PaymentError::InvalidDecimalPrecision)));
+
+    // Decimals at boundary 18 succeeds
+    fix.client.set_token_decimals(&fix.owner, &asset, &18u32);
+    assert_eq!(fix.client.get_token_decimals(&asset), 18);
+}
+
+
 

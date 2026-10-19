@@ -95,6 +95,12 @@ To prevent denial-of-service floods, disk exhaustion, and inflated logging costs
 - **Payload Deduplication**: Reports sharing identical `violated-directive` (or `effective-directive`) and `blocked-uri` within a **5-minute sliding window** are suppressed from warning logs. Suppressed duplicates are tracked under `csp_reports_dropped_total{reason="deduplicated"}`.
 - **Metrics Observability**: Accepted reports increment `ophirpay_csp_violation_reports_total`, while dropped or throttled reports increment `ophirpay_csp_reports_dropped_total{reason="..."}` in Prometheus exposition.
 
+### Theme Bootstrap Blocking Script & CSP Nonce (#1376)
+
+To eliminate Flash of Unstyled Content (FOUC) and theme flicker before client-side hydration, an inline pre-paint script (`THEME_BLOCKING_SCRIPT` in `src/app/layout.tsx`) executes synchronously in `<head>`.
+The script inspects `localStorage.getItem("theme")` and `localStorage.getItem("ophirpay-theme")` with fallback to `prefers-color-scheme: dark`, setting `.dark`, `data-theme`, and `colorScheme` on `document.documentElement` before the first paint.
+To comply with Content Security Policy (`script-src`), `src/proxy.ts` generates a per-request cryptographically unguessable nonce via the `x-nonce` request header, which `src/app/layout.tsx` stamps directly onto `<script id="theme-blocking-script" nonce={nonce}>`.
+
 ## Checking a deployment
 
 Inspect both an HTML page and an API response at each deployment boundary; a
