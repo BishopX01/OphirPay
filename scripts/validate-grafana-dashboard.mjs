@@ -26,6 +26,9 @@ const publishedMetrics = new Set([
   "ophirpay_process_heap_used_bytes",
   "ophirpay_process_heap_total_bytes",
   "ophirpay_sse_open_connections",
+  "ophirpay_sse_active_connections",
+  "ophirpay_sse_connection_duration_seconds_sum",
+  "ophirpay_sse_connection_duration_seconds_count",
 ]);
 
 function fail(message) {
