@@ -394,4 +394,4 @@ pub const DEFAULT_STELLAR_DECIMALS: u32 = 7;
 /// Maximum allowable decimal precision for custom tokens (0 to 18 decimals) (#1347).
 pub const MAX_TOKEN_DECIMALS: u32 = 18;
 
-
+

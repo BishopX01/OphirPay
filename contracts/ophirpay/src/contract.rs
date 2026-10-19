@@ -51,6 +51,30 @@ pub const BUMP_MAINTENANCE_TTL: u32 = 100_000;
 // `get_reason_code_analytics`.
 pub const MAX_READER_ENTRIES: u32 = 100;
 
+// ── Memo Text Limit (issue #1360) ─────────────────────────────
+/// Maximum byte length for memo/metadata strings across contract entrypoints (#1360).
+pub const MAX_MEMO_BYTES: u32 = 64;
+
+/// Validate memo/metadata text: length cannot exceed `MAX_MEMO_BYTES` (64 bytes)
+/// and must not contain ASCII control characters (< 0x20 except \t and \n) or DEL (0x7F).
+pub fn validate_memo_text(memo: &String) -> Result<(), PaymentError> {
+    let len = memo.len();
+    if len > MAX_MEMO_BYTES {
+        return Err(PaymentError::MemoTooLong);
+    }
+    if len > 0 {
+        let mut buf = [0u8; 64];
+        let slice = &mut buf[..len as usize];
+        memo.copy_into_slice(slice);
+        for &b in slice.iter() {
+            if (b < 0x20 && b != b'\t' && b != b'\n') || b == 0x7f {
+                return Err(PaymentError::MemoTooLong);
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Contract ───────────────────────────────────────────────────
 
 #[contract]
@@ -1224,6 +1248,8 @@ impl OphirPayContract {
     ) -> Result<u64, PaymentError> {
         payer.require_auth();
         require_not_paused(&env, PauseScope::Payments)?;
+        validate_memo_text(&tx_hash)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -1662,6 +1688,7 @@ impl OphirPayContract {
 
         // Pause OphirPay
         env.storage().instance().set(&PAUSED, &true);
+        env.storage().instance().set(&PAUSE_FLAGS, &PAUSE_ALL);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         // Cross-contract call: pause the Emitter if linked. The result is
@@ -1696,6 +1723,7 @@ impl OphirPayContract {
 
         // Unpause OphirPay
         env.storage().instance().set(&PAUSED, &false);
+        env.storage().instance().set(&PAUSE_FLAGS, &0u32);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         // Cross-contract call: unpause the Emitter if linked. Result propagated
@@ -1771,7 +1799,49 @@ impl OphirPayContract {
             }
             id += 1;
         }
-        paused
+        paused
+    }
+
+    /// Owner-only: pause or resume specific subsystems using capability bitflags (#1358).
+    /// Multiple subsystems can be targeted simultaneously by OR-ing flags.
+    pub fn set_subsystem_pause(
+        env: Env,
+        caller: Address,
+        subsystem: u32,
+        paused: bool,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+
+        let mut flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+        if paused {
+            flags |= subsystem;
+        } else {
+            flags &= !subsystem;
+        }
+        env.storage().instance().set(&PAUSE_FLAGS, &flags);
+        env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+
+        let action = if paused { "subsystem_paused" } else { "subsystem_resumed" };
+        let details = if paused {
+            "Subsystem paused via bitflag"
+        } else {
+            "Subsystem resumed via bitflag"
+        };
+        record_audit(&env, action, &caller, subsystem as u64, details);
+        Ok(())
+    }
+
+    /// Read-only: whether a specific subsystem bitflag is currently paused.
+    pub fn is_subsystem_paused(env: Env, subsystem: u32) -> bool {
+        let globally_paused: bool = env.storage().instance().get(&PAUSED).unwrap_or(false);
+        let flags: u32 = env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0);
+        globally_paused || (flags & subsystem) != 0
+    }
+
+    /// Read-only: current active subsystem pause bitmask flags.
+    pub fn get_pause_flags(env: Env) -> u32 {
+        env.storage().instance().get(&PAUSE_FLAGS).unwrap_or(0)
     }
 
     /// Get the current locked balance (escrows, streams, proposal deposits).
@@ -2171,6 +2241,8 @@ impl OphirPayContract {
     ) -> Result<u64, PaymentError> {
         payer.require_auth();
         require_not_paused(&env, PauseScope::Payments)?;
+        validate_memo_text(&tx_hash)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -2336,6 +2408,7 @@ impl OphirPayContract {
         let _guard = acquire_reentrancy_lock(&env)?;
         depositor.require_auth();
         require_not_paused(&env, PauseScope::Escrows)?;
+        validate_memo_text(&metadata)?;
         if amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -2750,6 +2823,7 @@ impl OphirPayContract {
         let _guard = acquire_reentrancy_lock(&env)?;
         creator.require_auth();
         require_not_paused(&env, PauseScope::Streams)?;
+        validate_memo_text(&metadata)?;
         if total_amount <= 0 {
             return Err(PaymentError::InvalidAmount);
         }
@@ -3692,6 +3766,7 @@ impl OphirPayContract {
     ) -> Result<BatchCreateResult, PaymentError> {
         creator.require_auth();
         require_not_paused(&env, PauseScope::Batches)?;
+        validate_memo_text(&tx_hash)?;
 
         let len = payees.len();
         if len == 0 {

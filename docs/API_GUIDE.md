@@ -286,6 +286,37 @@ return successResponse(payment, undefined, 201);            // 201 created
 
 Clients check `success` first; `code` is stable for programmatic handling.
 
+### Keyset & Cursor-Based Pagination (#1361)
+
+For deep collections (such as `/api/audit-log` or enterprise payment lists), offset pagination (`skip`/`take`) causes performance degradation on Postgres. Keyset cursor-based pagination uses indexed columns (`createdAt`, `id`) with `cursor: { id }` and `take: limit + 1`:
+
+```json
+{
+  "success": true,
+  "data": [...],
+  "nextCursor": "cuid_xyz",
+  "hasMore": true,
+  "meta": {
+    "limit": 20,
+    "nextCursor": "cuid_xyz",
+    "hasMore": true
+  }
+}
+```
+
+#### Usage Example (`GET /api/audit-log`)
+- First page (descending order by timestamp):
+  ```bash
+  GET /api/audit-log?source=db&limit=20&order=desc
+  ```
+- Subsequent page using `nextCursor`:
+  ```bash
+  GET /api/audit-log?source=db&limit=20&order=desc&cursor=cuid_xyz
+  ```
+- Directional sorting is supported via `order=asc` or `order=desc`.
+- When `hasMore` is `false`, `nextCursor` resolves to `null`.
+
+
 ---
 
 ## 7. Rate-limit integration

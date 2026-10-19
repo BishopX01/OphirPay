@@ -1481,6 +1481,46 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/webhooks/{id}/deliveries/requeue:
+    post:
+      tags: [Webhooks]
+      summary: Requeue dead-lettered webhook deliveries for retry
+      description: |
+        Filters and bulk-requeues dead-lettered or failed webhook deliveries.
+        Resets delivery attempts to 0 and transitions status to PENDING for
+        worker redelivery.
+      security: [{ ApiKeyAuth: [] }, { BearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                statusCodes:
+                  type: array
+                  items: { type: integer }
+                onlyTimeouts:
+                  type: boolean
+                limit:
+                  type: integer
+                deliveryIds:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Requeue operation summary
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   # ── API Keys ──────────────────────────────────────────────
   /api/keys:
     get:
