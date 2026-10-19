@@ -45,6 +45,79 @@ export function setDatabasePoolWaitSeconds(seconds: number): void {
   counters.database_pool_wait_seconds = seconds;
 }
 
+/** Map of currently active SSE connections keyed by route (issue #1425). */
+const sseActiveConnections = new Map<string, number>([
+  ["events", 0],
+  ["audit-log", 0],
+]);
+
+/** Increment or decrement active SSE connection gauge for a specific route (issue #1425). */
+export function incSseActiveConnection(route: string, delta = 1): void {
+  const current = sseActiveConnections.get(route) ?? 0;
+  const next = Math.max(0, current + delta);
+  sseActiveConnections.set(route, next);
+}
+
+/** Get snapshot of active SSE connections by route (issue #1425). */
+export function getSseActiveConnections(): Array<{ route: string; count: number }> {
+  return Array.from(sseActiveConnections.entries()).map(([route, count]) => ({
+    route,
+    count,
+  }));
+}
+
+/** Histogram bucket upper bounds (seconds) for SSE connection duration (issue #1425). */
+export const SSE_DURATION_BUCKET_BOUNDS = [
+  1, 5, 15, 30, 60, 120, 300, 600, 1800, 3600,
+];
+
+export interface SseDurationObservation {
+  count: number;
+  sum: number;
+  buckets: number[];
+}
+
+const sseDurations = new Map<string, SseDurationObservation>();
+
+/** Record an SSE connection duration in seconds for a specific route (issue #1425). */
+export function recordSseConnectionDuration(
+  route: string,
+  durationSeconds: number
+): void {
+  let obs = sseDurations.get(route);
+  if (!obs) {
+    obs = {
+      count: 0,
+      sum: 0,
+      buckets: new Array(SSE_DURATION_BUCKET_BOUNDS.length + 1).fill(0),
+    };
+    sseDurations.set(route, obs);
+  }
+  obs.count += 1;
+  obs.sum += durationSeconds;
+  for (let i = 0; i < SSE_DURATION_BUCKET_BOUNDS.length; i++) {
+    if (durationSeconds <= SSE_DURATION_BUCKET_BOUNDS[i]) {
+      obs.buckets[i] += 1;
+    }
+  }
+  obs.buckets[SSE_DURATION_BUCKET_BOUNDS.length] += 1;
+}
+
+/** Get snapshot of recorded SSE connection duration observations (issue #1425). */
+export function getSseDurations(): Array<{
+  route: string;
+  observation: SseDurationObservation;
+}> {
+  return Array.from(sseDurations.entries()).map(([route, observation]) => ({
+    route,
+    observation: {
+      count: observation.count,
+      sum: observation.sum,
+      buckets: [...observation.buckets],
+    },
+  }));
+}
+
 export type CspReportDropReason = "rate_limited" | "deduplicated" | "oversized";
 
 const cspReportsDropped = new Map<CspReportDropReason, number>([
@@ -175,6 +248,11 @@ export function getMetricsSnapshot(): typeof counters & {
   delivery_attempts: DeliveryAttemptMetric[];
   delivery_final_outcomes: DeliveryFinalOutcomeMetric[];
   csp_reports_dropped: Record<CspReportDropReason, number>;
+  sse_active_connections: Array<{ route: string; count: number }>;
+  sse_connection_durations: Array<{
+    route: string;
+    observation: SseDurationObservation;
+  }>;
 } {
   return {
     ...counters,
@@ -190,6 +268,8 @@ export function getMetricsSnapshot(): typeof counters & {
         a.final_outcome.localeCompare(b.final_outcome)
     ),
     csp_reports_dropped: getCspReportsDroppedSnapshot(),
+    sse_active_connections: getSseActiveConnections(),
+    sse_connection_durations: getSseDurations(),
   };
 }
 
@@ -208,6 +288,9 @@ export function resetMetricsForTest(): void {
   for (const reason of ["rate_limited", "deduplicated", "oversized"] as CspReportDropReason[]) {
     cspReportsDropped.set(reason, 0);
   }
+  sseActiveConnections.set("events", 0);
+  sseActiveConnections.set("audit-log", 0);
+  sseDurations.clear();
 }
 
 // ── Per-endpoint latency histograms and error counts ──────────
