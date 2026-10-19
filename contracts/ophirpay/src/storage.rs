@@ -101,4 +101,11 @@ pub fn touch_record_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &En
     }
 }
 
+/// Subsystem capability pause bitflags storage key (#1358)
+pub const PAUSE_FLAGS: Symbol = symbol_short!("PAUS_FLG");
+
+pub const MIN_DISPUTE_PERIOD_KEY: Symbol = symbol_short!("DISP_PER");
+pub const DEFAULT_MIN_DISPUTE_PERIOD: u64 = 86_400;
+
+
 
