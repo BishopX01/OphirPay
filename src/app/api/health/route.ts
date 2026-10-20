@@ -11,6 +11,7 @@ import {
   isRpcFailoverDegraded,
   RPC_FAILOVER_DEGRADED_AFTER_MS,
 } from "@/lib/rpc-failover";
+import { getCircuitBreakerState } from "@/lib/rpc-circuit-breaker";
 import { getAppVersionInfo } from "@/lib/app-version";
 
 // ── Check helpers ──────────────────────────────────────────────
@@ -73,11 +74,13 @@ export const GET = withMetrics("GET /api/health", withRequestLogging(async funct
         5000
       );
       const failover = getRpcFailoverState();
+      const circuitBreaker = getCircuitBreakerState();
       const rpcStatus: CheckStatus = rpc?.ok ? "ok" : "error";
+      const isProbeDegraded = rpcStatus !== "ok" || circuitBreaker.state !== "CLOSED";
 
       return successResponse(
         {
-          status: rpcStatus === "ok" ? "ok" : "degraded",
+          status: isProbeDegraded ? "degraded" : "ok",
           services: {
             stellar: {
               network: STELLAR_NETWORK,
@@ -85,6 +88,7 @@ export const GET = withMetrics("GET /api/health", withRequestLogging(async funct
               rpc: { status: rpcStatus, latencyMs: rpc?.latencyMs ?? null },
             },
           },
+          circuitBreaker,
           rpcFailover: {
             activeEndpoint: failover.activeEndpoint,
             primaryEndpoint: failover.primaryEndpoint,
@@ -180,12 +184,15 @@ export const GET = withMetrics("GET /api/health", withRequestLogging(async funct
     // operator asks during an upstream RPC incident.
     const failover = getRpcFailoverState();
     const failoverDegraded = isRpcFailoverDegraded();
+    const circuitBreaker = getCircuitBreakerState();
 
     const optionalChecks = [rpcStatus, horizonStatus, contractStatus, redisStatus].filter(
       (s: string) => s !== "disabled" && s !== "unchecked"
     );
     const hasOptionalError = optionalChecks.includes("error");
-    const isDegraded = dbStatus === "ok" && (hasOptionalError || failoverDegraded);
+    const isDegraded =
+      dbStatus === "ok" &&
+      (hasOptionalError || failoverDegraded || circuitBreaker.state !== "CLOSED");
     const overallStatus = dbStatus === "error" ? "error" : isDegraded ? "degraded" : "ok";
     const { version, commit } = getAppVersionInfo();
 
@@ -209,6 +216,7 @@ export const GET = withMetrics("GET /api/health", withRequestLogging(async funct
             status: contractStatus,
           },
         },
+        circuitBreaker,
         rpcFailover: {
           activeEndpoint: failover.activeEndpoint,
           primaryEndpoint: failover.primaryEndpoint,

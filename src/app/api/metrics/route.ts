@@ -247,7 +247,15 @@ export async function buildMetrics(): Promise<string> {
     "",
     "# HELP ophirpay_rpc_failover_longest_fallback_duration_seconds Longest fallback episode observed since process start",
     "# TYPE ophirpay_rpc_failover_longest_fallback_duration_seconds gauge",
-    `ophirpay_rpc_failover_longest_fallback_duration_seconds ${(failover.longestFallbackDurationMs / 1000).toFixed(3)}`
+    `ophirpay_rpc_failover_longest_fallback_duration_seconds ${(failover.longestFallbackDurationMs / 1000).toFixed(3)}`,
+    "",
+    "# HELP ophirpay_rpc_circuit_breaker_trips_total Total times the RPC circuit breaker tripped open on provider failure",
+    "# TYPE ophirpay_rpc_circuit_breaker_trips_total counter",
+    `ophirpay_rpc_circuit_breaker_trips_total ${c.rpc_circuit_breaker_trips_total}`,
+    "",
+    "# HELP rpc_circuit_breaker_trips_total Total times the RPC circuit breaker tripped open on provider failure",
+    "# TYPE rpc_circuit_breaker_trips_total counter",
+    `rpc_circuit_breaker_trips_total ${c.rpc_circuit_breaker_trips_total}`
   );
 
   // ── Soroban RPC performance & requests (issue #1412) ────────
