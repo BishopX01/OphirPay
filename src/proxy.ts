@@ -120,8 +120,13 @@ export async function proxy(request: NextRequest) {
       pathname.startsWith("/api/health/") ||
       pathname === "/api/metrics";
 
-    let remaining = RATE_LIMIT_MAX;
-    let resetAt = Date.now() + RATE_LIMIT_WINDOW_MS;
+    // Defaults for exempt endpoints (health/metrics), which still advertise
+    // the window even though they are never throttled.
+    let rateLimitHeaders = getRateLimitHeaders({
+      limit: RATE_LIMIT_MAX,
+      remaining: RATE_LIMIT_MAX,
+      reset: Math.ceil((Date.now() + RATE_LIMIT_WINDOW_MS) / 1000),
+    });
 
     if (!skipRateLimit) {
       const ip = getClientIp(request.headers);
@@ -130,12 +135,13 @@ export async function proxy(request: NextRequest) {
         RATE_LIMIT_WINDOW_MS,
         RATE_LIMIT_MAX
       );
-      remaining = result.remaining;
-      resetAt = result.resetAt;
+      const info = rateLimitInfoFromResult(result);
+      rateLimitHeaders = result.allowed
+        ? getRateLimitHeaders(info)
+        : getRateLimitExceededHeaders(info);
 
       // Rate limit exceeded
       if (!result.allowed) {
-        const retryAfter = Math.ceil((resetAt - Date.now()) / 1000);
         // Rejected before any route handler runs, so log here (with the same
         // request id returned in the response header below).
         logger.request(request.method, pathname, 429, performance.now() - startedAt, requestId);
@@ -147,7 +153,15 @@ export async function proxy(request: NextRequest) {
               message: "Too many requests. Please try again later.",
             },
           },
-          { status: 429 }
+          {
+            status: 429,
+            // Limit / Remaining / Reset / Retry-After — a 429 without these
+            // forces SDKs to guess the backoff window.
+            headers: {
+              ...rateLimitHeaders,
+              "X-Request-Id": requestId,
+            },
+          }
         );
         rateLimited.headers.set("Retry-After", String(retryAfter));
         rateLimited.headers.set("X-Request-Id", requestId);
@@ -169,12 +183,12 @@ export async function proxy(request: NextRequest) {
     // Security, CORS, and observability headers
     response.headers.set("X-Request-Id", requestId);
     response.headers.set("X-Api-Version", "1.0.0");
-    // Baseline headers on every API response, including ones produced above
-    // before a route handler ran (401/403/429).
-    applySecurityHeaders(response.headers);
-    response.headers.set("X-RateLimit-Limit", String(RATE_LIMIT_MAX));
-    response.headers.set("X-RateLimit-Remaining", String(remaining));
-    response.headers.set("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
+    response.headers.set("X-Content-Type-Options", "nosniff");
+    response.headers.set("X-Frame-Options", "DENY");
+    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    for (const [name, value] of Object.entries(rateLimitHeaders)) {
+      response.headers.set(name, value);
+    }
 
     // Strict CORS resolution (#1393)
     const origin = request.headers.get("origin");

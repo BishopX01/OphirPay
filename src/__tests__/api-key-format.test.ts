@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/lib/prisma", () => ({
   default: {
     apiKey: {
-      findFirst: vi.fn(),
+      findMany: vi.fn(),
       update: vi.fn(() => Promise.resolve({})),
       create: vi.fn(),
     },
@@ -33,6 +33,7 @@ import {
   generateApiKey,
   hashApiKey,
   hashApiKeyV1,
+  hashApiKeyV2,
   isValidApiKeyFormat,
 } from "@/lib/api-auth";
 
@@ -181,15 +182,16 @@ describe("authenticateRequest", () => {
       })
     );
 
-  it("authenticates a standardized key and queries both digest forms", async () => {
+  it("authenticates a standardized key by prefix and verifies the stored digest", async () => {
     const row = {
       id: "key_1",
       userId: "u1",
       name: "CI bot",
       expiresAt: null,
       scopes: ["read:payments"],
+      keyHash: await hashApiKeyV2(STANDARDIZED_TEST_KEY),
     };
-    vi.mocked(prisma.apiKey.findFirst).mockResolvedValueOnce(row as never);
+    vi.mocked(prisma.apiKey.findMany).mockResolvedValueOnce([row] as never);
 
     const auth = await call(STANDARDIZED_TEST_KEY);
     expect(auth).toEqual({
@@ -199,62 +201,82 @@ describe("authenticateRequest", () => {
       scopes: ["read:payments"],
     });
 
-    const where = vi.mocked(prisma.apiKey.findFirst).mock.calls[0]![0]!
-      .where as { keyHash: { in: string[] }; prefix: string };
+    const where = vi.mocked(prisma.apiKey.findMany).mock.calls[0]![0]!
+      .where as { prefix: string; revokedAt: null };
     expect(where.prefix).toBe(deriveKeyPrefix(STANDARDIZED_TEST_KEY));
-    expect(where.keyHash.in).toContain(hashApiKeyV1(STANDARDIZED_TEST_KEY));
-    expect(where.keyHash.in).toContain(hashApiKey(STANDARDIZED_TEST_KEY));
+    expect(where.revokedAt).toBeNull();
+  });
+
+  it("rejects a v2 digest that does not match the presented key", async () => {
+    vi.mocked(prisma.apiKey.findMany).mockResolvedValueOnce([
+      {
+        id: "key_other",
+        userId: "u_other",
+        name: "someone else",
+        expiresAt: null,
+        scopes: [],
+        keyHash: await hashApiKeyV2(`${API_KEY_PREFIX}${"b".repeat(64)}`),
+      },
+    ] as never);
+
+    expect(await call(POST_701_LEGACY_KEY)).toBeNull();
   });
 
   it("still authenticates keys minted before #1397 (post-#701 32-byte oph_ format)", async () => {
-    vi.mocked(prisma.apiKey.findFirst).mockResolvedValueOnce({
-      id: "key_legacy_701",
-      userId: "u2",
-      name: "legacy 701 key",
-      expiresAt: null,
-      scopes: ["read:payments"],
-    } as never);
+    vi.mocked(prisma.apiKey.findMany).mockResolvedValueOnce([
+      {
+        id: "key_legacy_701",
+        userId: "u2",
+        name: "legacy 701 key",
+        expiresAt: null,
+        scopes: ["read:payments"],
+        keyHash: hashApiKeyV1(POST_701_LEGACY_KEY),
+      },
+    ] as never);
 
     const auth = await call(POST_701_LEGACY_KEY);
     expect(auth?.userId).toBe("u2");
     expect(API_KEY_LOOKUP_PATTERN.test(POST_701_LEGACY_KEY)).toBe(true);
-    const where = vi.mocked(prisma.apiKey.findFirst).mock.calls[0]![0]!
-      .where as { keyHash: { in: string[] }; prefix: string };
+    const where = vi.mocked(prisma.apiKey.findMany).mock.calls[0]![0]!
+      .where as { prefix: string };
     expect(where.prefix).toBe(deriveKeyPrefix(POST_701_LEGACY_KEY));
   });
 
   it("still authenticates keys minted before #701 (legacy 24-byte oph_ format)", async () => {
-    vi.mocked(prisma.apiKey.findFirst).mockResolvedValueOnce({
-      id: "key_legacy_pre701",
-      userId: "u3",
-      name: "pre-701 old",
-      expiresAt: null,
-      scopes: null,
-    } as never);
+    vi.mocked(prisma.apiKey.findMany).mockResolvedValueOnce([
+      {
+        id: "key_legacy_pre701",
+        userId: "u3",
+        name: "pre-701 old",
+        expiresAt: null,
+        scopes: null,
+        keyHash: hashApiKey(PRE_701_LEGACY_KEY),
+      },
+    ] as never);
 
     const auth = await call(PRE_701_LEGACY_KEY);
     expect(auth?.userId).toBe("u3");
     expect(API_KEY_LOOKUP_PATTERN.test(PRE_701_LEGACY_KEY)).toBe(true);
-    const where = vi.mocked(prisma.apiKey.findFirst).mock.calls[0]![0]!
-      .where as { keyHash: { in: string[] } };
-    expect(where.keyHash.in).toContain(hashApiKey(PRE_701_LEGACY_KEY));
   });
 
   it("rejects malformed material without touching the database", async () => {
     expect(await call("totally-not-a-key")).toBeNull();
     expect(await call(`${API_KEY_PREFIX}${"a".repeat(40)}`)).toBeNull();
     expect(await call("op_test_invalid_crc")).toBeNull();
-    expect(prisma.apiKey.findFirst).not.toHaveBeenCalled();
+    expect(prisma.apiKey.findMany).not.toHaveBeenCalled();
   });
 
   it("rejects an expired key", async () => {
-    vi.mocked(prisma.apiKey.findFirst).mockResolvedValueOnce({
-      id: "key_expired",
-      userId: "u4",
-      name: "expired",
-      expiresAt: new Date(Date.now() - 1000),
-      scopes: [],
-    } as never);
+    vi.mocked(prisma.apiKey.findMany).mockResolvedValueOnce([
+      {
+        id: "key_expired",
+        userId: "u4",
+        name: "expired",
+        expiresAt: new Date(Date.now() - 1000),
+        scopes: [],
+        keyHash: await hashApiKeyV2(STANDARDIZED_TEST_KEY),
+      },
+    ] as never);
 
     expect(await call(STANDARDIZED_TEST_KEY)).toBeNull();
   });

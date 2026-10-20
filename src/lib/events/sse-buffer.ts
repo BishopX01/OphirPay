@@ -66,6 +66,12 @@ export interface BoundedSseBuffer {
   attach(controller: ReadableStreamDefaultController<Uint8Array>): void;
   /** Enqueue an SSE event (or buffer it, subject to the policy). */
   push(event: string, data: unknown): void;
+  /**
+   * Enqueue an SSE **comment** frame (e.g. `ping` keep-alives). Comments are
+   * ignored by `EventSource`; when the buffer is full they are dropped rather
+   * than evicting a real event.
+   */
+  pushComment(text: string): void;
   /** ReadableStream `pull` hook — drains on consumer demand. */
   pull(controller: ReadableStreamDefaultController<Uint8Array>): void;
   /** Stop buffering and close the stream (client already gone). */
@@ -243,11 +249,39 @@ export function createBoundedSseBuffer(
     drain();
   };
 
+  const pushComment = (text: string): void => {
+    if (disconnected) return;
+
+    // Same stalled-consumer guard as data frames.
+    if (queue.length > 0 && now() - lastDrainAt > idleTimeoutMs) {
+      requestDisconnect("idle-timeout");
+      drain();
+      return;
+    }
+
+    const bytes = encodeSseComment(text);
+
+    // A keep-alive is expendable: if the budget is exhausted, skip the
+    // comment instead of dropping a queued event to make room for it.
+    if (
+      queue.length + 1 > maxEvents ||
+      queuedBytes + bytes.length > maxBytes
+    ) {
+      drain();
+      return;
+    }
+
+    queue.push(bytes);
+    queuedBytes += bytes.length;
+    drain();
+  };
+
   return {
     attach(controller) {
       controllerRef = controller;
     },
     push,
+    pushComment,
     pull(controller) {
       controllerRef = controller;
       lastDrainAt = now();

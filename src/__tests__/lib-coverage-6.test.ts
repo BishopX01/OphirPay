@@ -6,7 +6,7 @@ import { renderHook, act } from '@testing-library/react';
 // ── Low-coverage lib modules ──
 import { useFormSubmit, useFormReset } from '@/lib/form-helpers';
 import { computePagination, prismaPagination } from '@/lib/pagination-utils';
-import { getRateLimitHeaders, isRateLimited } from '@/lib/rate-limit-headers';
+import { getRateLimitHeaders, getRateLimitExceededHeaders, isRateLimited } from '@/lib/rate-limit-headers';
 import { sendNotification, isPermissionRequested, requestNotificationPermission, NOTIFY } from '@/lib/notifications';
 import { logger } from '@/lib/logger';
 import { generateRandomHex, generateId, timingSafeEqual } from '@/lib/crypto';
@@ -194,18 +194,19 @@ describe('pagination-utils', () => {
 // ═══════════════════════════════════════════════════════════════
 describe('rate-limit-headers', () => {
   describe('getRateLimitHeaders', () => {
-    it('returns headers with remaining capacity', () => {
+    it('returns the quota headers with remaining capacity', () => {
       const headers = getRateLimitHeaders({ limit: 100, remaining: 50, reset: 2000000000 });
       expect(headers['X-RateLimit-Limit']).toBe('100');
       expect(headers['X-RateLimit-Remaining']).toBe('50');
       expect(headers['X-RateLimit-Reset']).toBe('2000000000');
-      expect(headers['Retry-After']).toBe('0');
+      expect(headers['Retry-After']).toBeUndefined();
     });
 
-    it('returns Retry-After when depleted', () => {
+    it('returns Retry-After only on a throttled response', () => {
       const future = Math.floor(Date.now() / 1000) + 60;
-      const headers = getRateLimitHeaders({ limit: 100, remaining: 0, reset: future });
+      const headers = getRateLimitExceededHeaders({ limit: 100, remaining: 0, reset: future });
       expect(Number(headers['Retry-After'])).toBeGreaterThan(0);
+      expect(headers['X-RateLimit-Reset']).toBe(String(future));
     });
   });
 

@@ -13,7 +13,8 @@ import { getAuthContext } from "@/lib/auth-session";
 import {
   deriveKeyPrefix,
   generateApiKey,
-  hashApiKeyV1,
+  hashApiKeyV2,
+  assertMinimumKeyEntropy,
   API_SCOPES,
 } from "@/lib/api-auth";
 import { withRequestLogging } from "@/lib/request-logging";
@@ -118,9 +119,14 @@ export const POST = withMetrics("POST /api/keys", withRequestLogging(async funct
     if (!quota.allowed) return apiKeyQuotaError(quota);
 
     // `generateApiKey` mints 32 CSPRNG bytes (issue #701) and fails closed if
-    // the result ever drifts from the documented `oph_` + 64-hex format.
+    // the result ever drifts from the documented `op_` + 64-hex format. The
+    // entropy assertion is belt-and-braces: a short/predictable key cannot be
+    // made safe by hashing it, so creation refuses one outright.
     const rawKey = generateApiKey();
-    const keyHash = hashApiKeyV1(rawKey);
+    assertMinimumKeyEntropy(rawKey);
+    // Argon2id with a per-key random salt — computed before the transaction
+    // so the serializable lock covers only the count/insert/audit writes.
+    const keyHash = await hashApiKeyV2(rawKey);
     const prefix = deriveKeyPrefix(rawKey);
     const initiatedBy = describeKeyInitiator(auth);
 
