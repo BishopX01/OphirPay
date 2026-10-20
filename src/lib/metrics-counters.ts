@@ -40,11 +40,18 @@ const counters = {
   database_pool_wait_seconds: 0,
   /** Counter: cumulative cron execution logs pruned older than retention window (issue #1420). */
   cron_logs_pruned_total: 0,
+  /** Counter: cumulative RPC circuit breaker trips to OPEN state (issue #1421). */
+  rpc_circuit_breaker_trips_total: 0,
 };
 
 /** Increment the cron logs pruned counter (issue #1420). */
 export function incCronLogsPruned(count = 1): void {
   counters.cron_logs_pruned_total += count;
+}
+
+/** Increment the RPC circuit breaker trips counter (issue #1421). */
+export function incCircuitBreakerTrips(count = 1): void {
+  counters.rpc_circuit_breaker_trips_total += count;
 }
 
 /** Set the Prisma connection pool queue wait time in seconds (issue #1412). */
