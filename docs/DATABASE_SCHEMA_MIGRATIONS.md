@@ -41,6 +41,7 @@ erDiagram
 | **`Webhook`** | `id` (CUID) | Registered endpoints receiving HMAC-signed event notifications. | `userId → User(id)` |
 | **`ApiKey`** | `id` (CUID) | Programmatic authentication storing SHA-256 `keyHash` and 8-character display `prefix`. | `userId → User(id)` |
 | **`NotificationHook`** | `id` (CUID) | Mirrors on-chain Soroban event hooks to route contract signals. | `userId → User(id)` |
+| **`CronExecutionLog`** | `id` (CUID) | Ephemeral run audit records of scheduled payment runs. Pruned automatically after 90 days. | None |
 
 ---
 
@@ -236,7 +237,23 @@ return the same rows for the same terms, and the API contract is unchanged.
 
 ---
 
-## 6. Summary Checklist for Pull Requests
+## 6. Automated Retention & Cron Log Pruning
+
+High-frequency background cron runs (`/api/cron` running every 5 minutes) persist execution cycles to monitor scheduler health, payment attempts, and webhook retries. Over time, high-volume log accumulation creates table bloat in PostgreSQL, increasing storage consumption and index maintenance costs (issue #1420).
+
+### Retention Policy & Architecture
+
+- **Target Table:** `CronExecutionLog`
+- **Retention Window:** 90 days (`CRON_LOG_RETENTION_DAYS = 90`)
+- **Batch Size:** 1,000 records per transaction (`CRON_LOG_PRUNE_BATCH_SIZE = 1000`)
+- **Safety Guarantee:** Active, processing, and failed recurring schedules (`Recurrence`, `ScheduledPayment`) are **never deleted**. Only ephemeral execution run-logs (`CronExecutionLog`) are pruned.
+- **Table Lock Avoidance:** Deletions are broken into discrete, bounded batches inside lightweight `$transaction` blocks (`DELETE FROM "CronExecutionLog" WHERE id IN (...)`), avoiding PostgreSQL exclusive table locks on production instances.
+- **Metrics & Observability:** The cumulative number of pruned logs is tracked by the Prometheus counter `cron_logs_pruned_total` (and `ophirpay_cron_logs_pruned_total`), exposed at `/api/metrics`.
+- **Trigger Cadence:** Pruning executes automatically at the end of each `/api/cron` run, and can also be invoked explicitly on demand via `GET /api/cron?task=cleanup`.
+
+---
+
+## 7. Summary Checklist for Pull Requests
 
 Before submitting a PR with database changes:
 - [ ] `prisma/schema.prisma` contains clear doc comments (`///`) on all new models/fields.

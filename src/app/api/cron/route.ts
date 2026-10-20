@@ -26,6 +26,79 @@ import {
   processWebhookRetryQueue,
   type WebhookRetryQueueSummary,
 } from "@/lib/webhook-delivery-service";
+import { incCronLogsPruned } from "@/lib/metrics-counters";
+
+export const CRON_LOG_RETENTION_DAYS = 90;
+export const CRON_LOG_PRUNE_BATCH_SIZE = 1000;
+
+export interface PruneCronLogsResult {
+  prunedCount: number;
+  batches: number;
+  cutoffDate: Date;
+}
+
+/**
+ * Prunes cron execution logs older than retention window (90 days) in batches of 1,000 (issue #1420).
+ *
+ * Operation executes inside transactions in small batches to avoid table locking on PostgreSQL.
+ * Active and failed recurring payment schedules (Recurrence, ScheduledPayment) are never deleted,
+ * only ephemeral run-logs are pruned.
+ */
+export async function pruneCronExecutionLogs(
+  options: {
+    retentionDays?: number;
+    batchSize?: number;
+    now?: Date;
+  } = {}
+): Promise<PruneCronLogsResult> {
+  const retentionDays = options.retentionDays ?? CRON_LOG_RETENTION_DAYS;
+  const batchSize = options.batchSize ?? CRON_LOG_PRUNE_BATCH_SIZE;
+  const now = options.now ?? new Date();
+  const cutoffDate = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
+
+  let totalPruned = 0;
+  let batches = 0;
+
+  while (true) {
+    const oldLogs = await prisma.cronExecutionLog.findMany({
+      where: {
+        createdAt: { lt: cutoffDate },
+      },
+      select: { id: true },
+      take: batchSize,
+    });
+
+    if (oldLogs.length === 0) break;
+
+    const ids = oldLogs.map((log) => log.id);
+
+    const deleteResult = await prisma.$transaction(async (tx) => {
+      return tx.cronExecutionLog.deleteMany({
+        where: {
+          id: { in: ids },
+        },
+      });
+    });
+
+    totalPruned += deleteResult.count;
+    batches += 1;
+    incCronLogsPruned(deleteResult.count);
+
+    if (oldLogs.length < batchSize) break;
+  }
+
+  logger.info("Cron execution logs pruned", {
+    prunedCount: totalPruned,
+    batches,
+    cutoffDate: cutoffDate.toISOString(),
+  });
+
+  return {
+    prunedCount: totalPruned,
+    batches,
+    cutoffDate,
+  };
+}
 
 /**
  * Scheduled payment execution (issue #175).
@@ -75,23 +148,26 @@ interface RunSummary {
   results: ExecutionResult[];
   /** Webhook retries drained by the same run. */
   webhookRetries: WebhookRetryQueueSummary;
+  /** Number of expired cron logs pruned during this run (issue #1420). */
+  prunedLogs?: number;
 }
 
 /**
- * Which queue this invocation should drain.
+ * Which queue this invocation should drain or task to execute.
  *
- * `all` (the default) keeps the existing scheduled-payment behaviour and also
- * drains the webhook retry queue. `webhook-retries` allows the retry processor
- * to be triggered on its own — useful when the signing key for scheduled
- * payments is not configured, or when retries need a faster cadence.
+ * `all` (the default) keeps the existing scheduled-payment behaviour,
+ * drains the webhook retry queue, records the run, and prunes expired logs.
+ * `webhook-retries` allows the retry processor to be triggered on its own.
+ * `cleanup` runs only the log retention pruning sweep (issue #1420).
  */
-type CronTask = "all" | "webhook-retries";
+type CronTask = "all" | "webhook-retries" | "cleanup";
 
 function resolveCronTask(request: Request): CronTask {
   const { searchParams } = new URL(request.url);
-  return searchParams.get("task") === "webhook-retries"
-    ? "webhook-retries"
-    : "all";
+  const task = searchParams.get("task");
+  if (task === "webhook-retries") return "webhook-retries";
+  if (task === "cleanup") return "cleanup";
+  return "all";
 }
 
 async function runScheduledPayments(request: Request) {
@@ -115,6 +191,15 @@ async function runScheduledPayments(request: Request) {
     }
 
     const task = resolveCronTask(request);
+
+    if (task === "cleanup") {
+      const pruneResult = await pruneCronExecutionLogs();
+      return successResponse({
+        prunedCount: pruneResult.prunedCount,
+        batches: pruneResult.batches,
+        cutoffDate: pruneResult.cutoffDate.toISOString(),
+      });
+    }
 
     // Always drain due webhook retries first. A failing retry batch is
     // isolated inside `processWebhookRetryQueue`, so it can never block the
@@ -278,12 +363,46 @@ async function runScheduledPayments(request: Request) {
       }
     }
 
+    // 1. Record execution cycle in database (issue #1420)
+    try {
+      await prisma.cronExecutionLog.create({
+        data: {
+          runId,
+          task,
+          picked: summary.picked,
+          executed: summary.executed,
+          failed: summary.failed,
+          skipped: summary.skipped,
+          status:
+            summary.failed > 0 && summary.executed > 0
+              ? "PARTIAL"
+              : summary.failed > 0
+              ? "FAILED"
+              : "SUCCESS",
+          completedAt: new Date(),
+        },
+      });
+    } catch (logErr) {
+      logger.warn("Failed to record cron execution log", { error: logErr, runId });
+    }
+
+    // 2. Prune ephemeral cron logs older than retention window (90 days) in batches of 1,000 (issue #1420)
+    try {
+      const pruneResult = await pruneCronExecutionLogs();
+      if (pruneResult.prunedCount > 0) {
+        summary.prunedLogs = pruneResult.prunedCount;
+      }
+    } catch (pruneErr) {
+      logger.warn("Failed to prune expired cron logs", { error: pruneErr });
+    }
+
     logger.info("Scheduled payment run complete", {
       runId,
       picked: summary.picked,
       executed: summary.executed,
       failed: summary.failed,
       skipped: summary.skipped,
+      prunedLogs: summary.prunedLogs,
     });
 
     return successResponse(summary);
