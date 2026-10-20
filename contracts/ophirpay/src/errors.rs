@@ -679,6 +679,9 @@ pub enum PaymentError {
     // ── Dispute Resolution Guards (316) ─────────────────────────
     /// Dispute cooling-off period is still active
     DisputeCoolingOffActive = 316,
+    // ── Spending Window Guards (317) ───────────────────────
+    /// Requested spend exceeds the remaining daily/monthly limit
+    SpendingLimitExceeded = 317,
 }
 
 
