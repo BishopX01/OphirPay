@@ -37,6 +37,13 @@ vi.mock("@/lib/webhook-dispatcher", () => ({
   dispatchWebhookEventAsync: vi.fn(),
 }));
 vi.mock("@/lib/api-cache", () => ({ invalidateCaches: vi.fn() }));
+// The idempotency lease has its own suites; "no broker" keeps these cases
+// focused on the problem-details contract.
+vi.mock("@/lib/idempotency", () => ({
+  claimIdempotencyKey: vi.fn().mockResolvedValue({ status: "unavailable" }),
+  IDEMPOTENCY_RESPONSE_TTL_SECONDS: 24 * 60 * 60,
+  IDEMPOTENCY_LOCK_TTL_SECONDS: 120,
+}));
 
 import { generateCsrfToken } from "@/lib/csrf";
 import { POST as createPayment } from "@/app/api/payments/route";
@@ -52,10 +59,18 @@ function csrfHeaders(): Record<string, string> {
   return { "x-csrf-token": token, cookie: `__Host-csrf=${token}` };
 }
 
+let idempotencyCounter = 0;
+
 function post(url: string, body: unknown, headers: Record<string, string> = {}) {
+  idempotencyCounter += 1;
   return new Request(`http://localhost${url}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...csrfHeaders(), ...headers },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `test-idempotency-key-${idempotencyCounter}`,
+      ...csrfHeaders(),
+      ...headers,
+    },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }

@@ -45,10 +45,29 @@ function getCsrfToken(): Promise<string | null> {
 }
 
 /**
+ * A fresh `Idempotency-Key` for one logical mutation (issue #1440).
+ *
+ * The money-moving POST routes reject mutations without this header, so the
+ * dashboard's own requests must send one. `crypto.randomUUID` is available in
+ * every browser this app supports; the fallback keeps non-secure contexts
+ * (and test doubles) working.
+ */
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `idem-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/**
  * Fetch wrapper that throws structured ApiError on non-2xx responses.
- * Automatically attaches the CSRF token to mutation requests, and retries
- * once with a freshly minted token if the cached one is rejected (e.g.
- * cookie expired or rotated server-side).
+ * Automatically attaches the CSRF token and an Idempotency-Key to mutation
+ * requests, and retries once with a freshly minted CSRF token if the cached
+ * one is rejected (e.g. cookie expired or rotated server-side).
+ *
+ * The idempotency key is generated once per call and reused by the CSRF
+ * retry, so a retried request is recognised as the same operation rather than
+ * a second payment.
  */
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? "GET";
@@ -57,6 +76,9 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
   const isMutation = !["GET", "HEAD", "OPTIONS"].includes(method);
   if (isMutation) {
+    if (!headers.has("Idempotency-Key")) {
+      headers.set("Idempotency-Key", newIdempotencyKey());
+    }
     const token = await getCsrfToken();
     if (token) headers.set("x-csrf-token", token);
   }

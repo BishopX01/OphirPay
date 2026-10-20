@@ -254,6 +254,69 @@ The `Dockerfile` uses a 3-stage build:
   Prisma query-engine binary, which the standalone tracer intentionally omits because it
   is platform-specific.
 
+### Multi-architecture images (linux/amd64 + linux/arm64)
+
+The published image is a **multi-arch manifest**: one tag (`ghcr.io/ophirpay/ophirpay:<tag>`)
+whose index lists a `linux/amd64` and a `linux/arm64` image. Docker, Compose and
+Kubernetes resolve the matching architecture automatically, so Apple Silicon
+laptops (M1–M4) and ARM cloud hosts (AWS Graviton, Oracle Ampere) run the image
+**natively** instead of under emulation.
+
+```bash
+# Inspect the available platforms for a published tag
+docker buildx imagetools inspect ghcr.io/ophirpay/ophirpay:main
+
+# Build both platforms locally and keep them in the build cache
+docker buildx create --use --name ophirpay-multi
+docker buildx build --platform linux/amd64,linux/arm64 -t ophirpay:local .
+
+# Build only your own architecture (fast path for day-to-day work)
+docker buildx build --platform linux/arm64 --load -t ophirpay:local .
+```
+
+CI is `.github/workflows/docker-multiarch.yml`:
+
+1. **`build-arch`** (matrix `linux/amd64`, `linux/arm64`) builds each platform with
+   `docker buildx --load` and boots the container, requiring both
+   `GET /api/health/live` → `200` **and** the image's own `HEALTHCHECK` to report
+   `healthy`. On the amd64 runner the arm64 leg runs through QEMU, so this is a real
+   arm64 boot test, not just a successful compile.
+2. **`publish-manifest`** (push to `main` / `integration/staging` only) rebuilds both
+   platforms from the same BuildKit cache scopes and pushes a single tag whose
+   manifest lists both architectures, then asserts with
+   `docker buildx imagetools inspect` that both are present.
+
+**Why the image is architecture-agnostic without extra work.** The Prisma client is
+regenerated inside the `builder` stage, and `docker buildx build --platform X` runs
+every stage *for platform X* (under QEMU when X is not the host). The native Prisma
+query engine copied into `runner` is therefore always the engine for the target
+architecture. `docker-compose.yml` deliberately contains **no** `platform:`
+key, so `docker compose up` picks the host architecture from the manifest; adding
+one would pin every developer and deployment host to a single architecture.
+
+**Build-time cost (documented and justified).** Both workflow jobs are cached with
+`type=gha` BuildKit cache (one scope per architecture) and only run when
+`Dockerfile`, dependency, Next config or Prisma files change:
+
+| Leg | Expected run time | Notes |
+|---|---|---|
+| `linux/amd64` | baseline (unchanged) | Native on GitHub's amd64 runners |
+| `linux/arm64` | **≈2–3× the amd64 leg** | Every build stage and the container boot run under QEMU emulation |
+| Full CI wall-clock | **≈ +5–8 minutes** on a cold cache, ≈ +0–1 minute warm | `build` and `publish` share cache scopes |
+
+The figures above are the expectation driving the design (QEMU's typical 2–3×
+penalty for a Next.js build); the authoritative numbers are the job durations in
+the Actions run summary, which is why each run writes its per-architecture
+result there.
+
+The increase buys correctness that cannot be bought more cheaply: without an
+arm64 image, every Apple Silicon developer and every Graviton/Ampere deployment
+pays a much larger penalty at *their* run time (emulated builds, slower-than-native
+containers, subtle `exec format error` failures), and none of them find out until
+they try it. QEMU is the only option without ARM hardware; the natural follow-up
+is to move the arm64 leg to a native `ubuntu-24.04-arm` runner, which removes the
+emulation cost entirely while keeping the same manifest output.
+
 ### Liveness vs readiness
 
 OphirPay exposes two probes with deliberately different meanings. They are

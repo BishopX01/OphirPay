@@ -1,3 +1,10 @@
+# No `platform:` directive anywhere in this file, on purpose (issue #1438).
+# The published image is a multi-arch manifest (linux/amd64 + linux/arm64 — see
+# docs/DEPLOYMENT.md → "Multi-architecture images"), so Compose resolves the
+# image matching the host: native on Apple Silicon (M1–M4) and on ARM cloud
+# hosts (Graviton/Ampere), x86-64 elsewhere. Pinning `platform: linux/amd64`
+# here would force emulation on every non-x86 machine and make `docker compose
+# up` several times slower for those developers.
 services:
   app:
     build:
