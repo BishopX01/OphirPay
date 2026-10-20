@@ -101,6 +101,38 @@ describe("GET /api/health", () => {
     expect(body.data.services.database.status).toBe("ok");
   });
 
+  it("answers the lightweight ?probe=rpc branch without touching the DB", async () => {
+    vi.mocked(global.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+    } as Response);
+
+    const res = await GET(new Request("http://localhost/api/health?probe=rpc"));
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.data.status).toBe("ok");
+    expect(body.data.services.stellar.rpc.status).toBe("ok");
+    expect(body.data.services.database).toBeUndefined();
+    expect(body.data.rpcFailover.primaryProviderName).toBe(
+      "soroban-testnet.stellar.org"
+    );
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it("reports a degraded RPC in the ?probe=rpc branch as a 200 body", async () => {
+    vi.mocked(global.fetch).mockRejectedValue(new Error("RPC down"));
+
+    const res = await GET(new Request("http://localhost/api/health?probe=rpc"));
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.data.status).toBe("degraded");
+    expect(body.data.services.stellar.rpc.status).toBe("error");
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
   it("returns package version and commit SHA from environment", async () => {
     vi.mocked(prisma.$queryRaw).mockResolvedValueOnce([{ 1: 1 }]);
     vi.mocked(global.fetch).mockResolvedValue({ ok: true } as Response);

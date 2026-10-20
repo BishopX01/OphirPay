@@ -172,24 +172,34 @@ produce CSV as output. Their format is defined by
 
 | | |
 | --- | --- |
-| Filters | `status` and `search` — identical to `GET /api/payments` |
-| Filename | `ophirpay-payments-YYYY-MM-DD.csv` (UTC date) |
+| Filters | `status`, `search`, `dateFrom`, `dateTo`, `asset` — identical to the payments list filters |
+| Formats | `format=csv` (default) or `format=json` |
+| Filename | `ophirpay-payments-YYYY-MM-DD.csv` / `.json` (UTC date) |
 | Transfer | `Transfer-Encoding: chunked`, header first, then 250-row chunks |
 | Row cap | **None.** A streamed export never withholds rows |
+| Rate limit | 20 exports per account per minute; 429 carries `Retry-After` |
 
 Columns, in order (header text is what appears in the file):
 
 ```csv
-Payment ID,Amount,Asset Code,Asset Issuer,Description,Memo,Status,Transaction Hash,Source Account,Destination Account,Created At
+Timestamp,Transaction Hash,Sender,Recipient,Asset,Amount,Fee,Memo,Status,Payment ID
 ```
+
+JSON exports contain the same fields as an array of objects, using the
+lower-camel field names (`timestamp`, `transactionHash`, `sender`,
+`recipient`, `asset`, `amount`, `fee`, `memo`, `status`, `id`).
 
 - `Amount` is written at the asset's 7-decimal scale (e.g. `100.2500000`),
   never in scientific notation.
-- `Created At` is ISO-8601 UTC.
+- `Fee` is read from the payment metadata when a fee was recorded; it is an
+  empty cell/string otherwise (the model has no dedicated fee column).
+- `Timestamp` is ISO-8601 UTC.
 - Empty values are written as empty cells, not the literal `null`.
 - Rows are ordered `createdAt DESC, id DESC`, matching the list endpoint, and
   are paged with a Prisma cursor (never `skip`), so a large export does not get
   slower page by page.
+- Date filters are inclusive and interpreted in UTC: `dateFrom` starts at
+  `00:00:00.000Z` and `dateTo` ends at `23:59:59.999Z`.
 
 ### Escaping (both exports)
 
@@ -213,9 +223,12 @@ complete file — the presence of a final newline is not proof of completeness,
 since the connection can also drop.
 
 ```ts
-const res = await fetch("/api/payments/export?status=COMPLETED");
+const res = await fetch(
+  "/api/payments/export?status=COMPLETED&dateFrom=2026-01-01&asset=XLM&format=json"
+);
 if (!res.ok) throw new Error(`export failed: ${res.status}`);
 const text = await res.text(); // rejects if the stream was errored
+const payments = JSON.parse(text); // [] when nothing matches
 ```
 
 > **Caveat:** `fetch` resolves as soon as the headers arrive, so `res.text()` is

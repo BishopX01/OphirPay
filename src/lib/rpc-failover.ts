@@ -107,6 +107,10 @@ export interface RpcFailoverState {
   activeEndpoint: string | null;
   /** First configured endpoint for the network. */
   primaryEndpoint: string | null;
+  /** Host name of the active endpoint, for UI/telemetry display. */
+  activeProviderName: string | null;
+  /** Host name of the primary endpoint, for UI/telemetry display. */
+  primaryProviderName: string | null;
   /**
    * True while serving from a non-primary endpoint; false before the first
    * RPC call and whenever the primary endpoint is serving.
@@ -128,6 +132,21 @@ export interface RpcFailoverState {
   lastFailureAt: Record<string, number>;
   /** Cumulative probe attempts / failures per endpoint. */
   probes: Record<string, { total: number; failed: number }>;
+}
+
+/**
+ * Stable provider label for an endpoint: its host name, or the raw value when
+ * it is not a parseable URL. Shared by the failover state snapshot and the
+ * client-side `useRpcHealth` hook so the banner and `/api/health` agree on
+ * which provider is active.
+ */
+export function getRpcProviderName(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
 }
 
 function reasonFromError(err: unknown): string {
@@ -309,6 +328,8 @@ export function getRpcFailoverState(): RpcFailoverState {
   return {
     activeEndpoint,
     primaryEndpoint,
+    activeProviderName: getRpcProviderName(activeEndpoint),
+    primaryProviderName: getRpcProviderName(primaryEndpoint),
     usingFallback,
     failoverCount,
     recoveryCount: recoveries,
