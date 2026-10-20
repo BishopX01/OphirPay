@@ -17,6 +17,8 @@
  * them is a follow-up, not a prerequisite.
  */
 
+import { registerShutdownTask } from "@/lib/lifecycle";
+
 /** The slice of the ioredis surface this module relies on. */
 export interface RedisLike {
   get(key: string): Promise<string | null>;
@@ -46,6 +48,9 @@ const REDIS_CONNECT_TIMEOUT_MS = 2_000;
 let client: RedisLike | null = null;
 let unavailable = false;
 let connecting: Promise<void> | null = null;
+// Set by disconnectRedis so a request racing the shutdown drain cannot open a
+// fresh socket after the process has been told to stop.
+let closing = false;
 
 /**
  * Connect on first use. Never throws: an unreachable or uninstallable Redis
@@ -53,7 +58,7 @@ let connecting: Promise<void> | null = null;
  */
 export function getRedisClient(): Promise<RedisLike | null> {
   if (client) return Promise.resolve(client);
-  if (unavailable) return Promise.resolve(null);
+  if (unavailable || closing) return Promise.resolve(null);
   if (connecting) return connecting.then(() => client);
 
   connecting = (async () => {
@@ -121,7 +126,31 @@ export function resetRedisClient(): void {
   client = null;
   unavailable = false;
   connecting = null;
+  closing = false;
 }
+
+/**
+ * Close the shared Redis connection. Registered as a graceful-shutdown task
+ * (#lifecycle) so SIGTERM/SIGINT send a real QUIT instead of dropping the
+ * socket. Safe to call when Redis was never configured or is already closed.
+ */
+export async function disconnectRedis(): Promise<void> {
+  closing = true;
+  const current = client;
+  client = null;
+  connecting = null;
+
+  if (!current?.quit) return;
+
+  try {
+    await current.quit();
+  } catch {
+    // A broker that is already gone must not turn shutdown into a failure.
+    unavailable = true;
+  }
+}
+
+registerShutdownTask({ name: "redis", run: disconnectRedis });
 
 /**
  * Inject a client — the test seam for the idempotency suite, which must run
