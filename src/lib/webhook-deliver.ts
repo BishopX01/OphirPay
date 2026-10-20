@@ -33,6 +33,37 @@ export const WEBHOOK_TIMESTAMP_HEADER = "X-OphirPay-Timestamp";
 export const WEBHOOK_SIGNATURE_HEADER = "X-OphirPay-Signature";
 export const WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 300;
 
+/**
+ * Largest raw request body the verifier will parse (1 MiB).
+ *
+ * `verifyWebhookSignature` receives a body from an unauthenticated HTTP
+ * client, so its cost must be bounded *before* `JSON.parse` and the HMAC see
+ * it: an attacker who can post a 500 MiB body would otherwise make the
+ * receiver spend CPU and memory on a payload that can never verify. The
+ * delivered envelopes are kilobytes (a batch envelope is capped at 100 child
+ * payments), so 1 MiB is orders of magnitude of headroom.
+ */
+export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Coerce a header/body value to the string used in the signed input, without
+ * ever invoking attacker-controlled `toString`/`valueOf`.
+ *
+ * Header values, body timestamps and signatures all arrive from outside. A
+ * plain `String(value)` throws `TypeError` for an object with a null
+ * prototype (or one whose `toString` throws), which is exactly the kind of
+ * input a fuzzer finds. Objects and symbols therefore collapse to `""` — they
+ * can never be a valid timestamp or hex digest anyway — while primitives keep
+ * the coercion the sender used.
+ */
+function toSignedString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "symbol" || typeof value === "object") return "";
+  if (typeof value === "function") return "";
+  return String(value);
+}
+
 export function webhookSignedInput(
   timestamp: string,
   canonicalBody: string
@@ -71,6 +102,7 @@ export function constantTimeEqual(a: string, b: string): boolean {
 export type WebhookVerificationReason =
   | "valid"
   | "invalid body"
+  | "body too large"
   | "signature mismatch"
   | "missing or invalid timestamp"
   | "payload too old — possible replay"
@@ -110,8 +142,14 @@ export interface WebhookVerificationResult {
  * This is the canonical in-repo receiver: subscriber examples in
  * `examples/webhook-verification/` mirror it, and the contract is documented in
  * `docs/webhook-verification.md`. It never throws on malformed input — a
- * truncated/oversized signature, a non-JSON body or an unparseable timestamp
- * all yield `{ valid: false, reason }`.
+ * truncated/oversized signature, a non-JSON body, an oversized body, a
+ * non-string header or an unparseable timestamp all yield
+ * `{ valid: false, reason }`.
+ *
+ * The whole path is wrapped in a final `try/catch`: every rejection above is
+ * explicit and intentional, and the catch exists so a future edit (or an
+ * exotic runtime value the checks do not anticipate) still degrades to
+ * "invalid" instead of surfacing a 500 to an unauthenticated caller.
  *
  * @example
  * ```ts
@@ -132,51 +170,72 @@ export function verifyWebhookSignature({
   maxAgeSeconds = WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
   now = Date.now(),
 }: WebhookVerificationInput): WebhookVerificationResult {
-  let parsed: WebhookPayload;
-  let canonical: string;
   try {
-    const raw: unknown = JSON.parse(body);
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    // A body or secret that is not a string cannot have been signed by us.
+    // Checked before touching either so no implicit coercion (which is where
+    // `String(attackerObject)` would run user code) ever happens.
+    if (typeof body !== "string" || typeof secret !== "string") {
       return { valid: false, reason: "invalid body" };
     }
-    parsed = raw as WebhookPayload;
-    // Empty the signature field (do NOT delete the key) — the HMAC covers
-    // `"signature":""` as the last member.
-    canonical = JSON.stringify({ ...parsed, signature: "" });
+    // Bounded work: reject before JSON.parse / HMAC on a body that could only
+    // ever be a denial-of-service attempt.
+    if (Buffer.byteLength(body, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
+      return { valid: false, reason: "body too large" };
+    }
+
+    let parsed: WebhookPayload;
+    let canonical: string;
+    try {
+      const raw: unknown = JSON.parse(body);
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        return { valid: false, reason: "invalid body" };
+      }
+      parsed = raw as WebhookPayload;
+      // Empty the signature field (do NOT delete the key) — the HMAC covers
+      // `"signature":""` as the last member.
+      canonical = JSON.stringify({ ...parsed, signature: "" });
+    } catch {
+      return { valid: false, reason: "invalid body" };
+    }
+
+    // The timestamp is authenticated (it is prepended to the canonical body),
+    // so the header is safe to trust for replay protection. Prefer the header,
+    // fall back to the body field, which is signed too. Either may be absent,
+    // non-string or an object — `toSignedString` normalises it without running
+    // attacker-controlled conversions.
+    const signedTimestamp = toSignedString(timestamp ?? parsed.timestamp ?? "");
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(webhookSignedInput(signedTimestamp, canonical))
+      .digest("hex");
+
+    // Constant-time comparison — see constantTimeEqual. Length mismatches
+    // return false without throwing (acceptance criterion of issue #1386).
+    if (!constantTimeEqual(toSignedString(signature), expected)) {
+      return { valid: false, reason: "signature mismatch" };
+    }
+
+    if (maxAgeSeconds > 0) {
+      const ts = Date.parse(signedTimestamp);
+      if (Number.isNaN(ts)) {
+        return { valid: false, reason: "missing or invalid timestamp" };
+      }
+      const ageSeconds = (now - ts) / 1000;
+      if (ageSeconds > maxAgeSeconds) {
+        return { valid: false, reason: "payload too old — possible replay" };
+      }
+      if (ageSeconds < -maxAgeSeconds) {
+        return { valid: false, reason: "payload timestamp is in the future" };
+      }
+    }
+
+    return { valid: true, reason: "valid" };
   } catch {
+    // Safety net: no input may throw out of the verifier. The explicit checks
+    // above are expected to catch everything, so reaching here means an
+    // unforeseen value — fail closed, never 500.
     return { valid: false, reason: "invalid body" };
   }
-
-  // The timestamp is authenticated (it is prepended to the canonical body), so
-  // the header is safe to trust for replay protection. Prefer the header, fall
-  // back to the body field, which is signed too.
-  const signedTimestamp = String(timestamp ?? parsed.timestamp ?? "");
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(webhookSignedInput(signedTimestamp, canonical))
-    .digest("hex");
-
-  // Constant-time comparison — see constantTimeEqual. Length mismatches return
-  // false without throwing (acceptance criterion of issue #1386).
-  if (!constantTimeEqual(String(signature ?? ""), expected)) {
-    return { valid: false, reason: "signature mismatch" };
-  }
-
-  if (maxAgeSeconds > 0) {
-    const ts = Date.parse(signedTimestamp);
-    if (Number.isNaN(ts)) {
-      return { valid: false, reason: "missing or invalid timestamp" };
-    }
-    const ageSeconds = (now - ts) / 1000;
-    if (ageSeconds > maxAgeSeconds) {
-      return { valid: false, reason: "payload too old — possible replay" };
-    }
-    if (ageSeconds < -maxAgeSeconds) {
-      return { valid: false, reason: "payload timestamp is in the future" };
-    }
-  }
-
-  return { valid: true, reason: "valid" };
 }
 
 export function signWebhookPayload(payload: WebhookPayload, secret: string): string {
