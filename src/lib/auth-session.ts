@@ -24,7 +24,9 @@ import { assertAuthSecret } from "@/lib/env";
 import { isValidStellarAddress } from "@/lib/stellar";
 import { isWalletRevoked } from "@/lib/session-revocation";
 
-export const SESSION_COOKIE_NAME = "ophirpay_session";
+import { SESSION_COOKIE_NAME } from "@/lib/session-cookie";
+
+export { SESSION_COOKIE_NAME };
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
@@ -171,6 +173,8 @@ export interface AuthContext {
   userId: string;
   publicKey?: string;
   keyId?: string;
+  /** Scopes granted to the API key (only set for key authentication). */
+  scopes?: string[];
 }
 
 /**
@@ -209,7 +213,13 @@ export async function getAuthContext(
   }
 
   const apiAuth = await authenticateRequest(request);
-  if (apiAuth) return { userId: apiAuth.userId, keyId: apiAuth.keyId };
+  if (apiAuth) {
+    return {
+      userId: apiAuth.userId,
+      keyId: apiAuth.keyId,
+      scopes: apiAuth.scopes,
+    };
+  }
 
   return null;
 }

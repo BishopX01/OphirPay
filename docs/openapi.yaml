@@ -1565,13 +1565,20 @@ paths:
                   type: array
                   description: >
                     Permitted scopes for the key. Allowed values:
-                    read:payments, write:payments, read:analytics, admin.
+                    read:payments, write:payments, payments:write,
+                    batches:create, escrow:write, escrow:release,
+                    webhooks:write, read:analytics, admin.
                     The admin scope grants all scopes. Empty means no access.
                   items:
                     type: string
                     enum:
                       - read:payments
                       - write:payments
+                      - payments:write
+                      - batches:create
+                      - escrow:write
+                      - escrow:release
+                      - webhooks:write
                       - read:analytics
                       - admin
       responses:
@@ -1641,6 +1648,11 @@ paths:
                     enum:
                       - read:payments
                       - write:payments
+                      - payments:write
+                      - batches:create
+                      - escrow:write
+                      - escrow:release
+                      - webhooks:write
                       - read:analytics
                       - admin
       responses:

@@ -2,11 +2,70 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { z } from "zod";
+import type { NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth-session";
 import { unauthorizedError, validationError, handleApiError } from "@/lib/api-response";
+import { hasScope, missingScopes, type ApiScope } from "@/lib/api-auth";
+import { formatProblemDetails } from "@/lib/api-errors";
+import { ERROR_CODES } from "@/lib/error-codes";
 import { verifyCsrf } from "@/lib/csrf";
 import { withMetrics } from "@/lib/metrics-middleware";
 import { withRequestLogging } from "@/lib/request-logging";
+
+/** The authenticated context produced by `getAuthContext`. */
+export interface ScopeAuthContext {
+  /** Present only when the request authenticated with an API key. */
+  keyId?: string;
+  /** Scopes carried by that API key. */
+  scopes?: string[];
+}
+
+/**
+ * Enforce a granular API-key scope on a route.
+ *
+ * Browser sessions (signed session cookie) are the account owner and are not
+ * scope-limited; scopes exist for delegated, machine-to-machine API keys, which
+ * `getAuthContext` marks with a `keyId`. A key without the required scope gets
+ * an RFC 9457 `application/problem+json` 403 naming the exact missing
+ * permission, rather than merely a generic forbidden response.
+ *
+ * Usage, after the route has established an authenticated user:
+ *
+ * ```ts
+ * const auth = await getAuthContext(request);
+ * if (!auth) return unauthorizedError();
+ * const scopeError = await requireScope(request, "batches:create", auth);
+ * if (scopeError) return scopeError;
+ * ```
+ */
+export async function requireScope(
+  request: Request,
+  scope: ApiScope,
+  auth: ScopeAuthContext
+): Promise<NextResponse | null> {
+  // Cookie-authenticated browser sessions belong to the resource owner.
+  if (!auth.keyId) return null;
+
+  if (hasScope(auth.scopes, [scope])) return null;
+
+  const missing = missingScopes(auth.scopes, [scope]);
+  const missingList = missing.length > 0 ? missing : [scope];
+
+  return formatProblemDetails({
+    status: 403,
+    code: ERROR_CODES.INSUFFICIENT_SCOPE,
+    title: "Insufficient scope",
+    detail:
+      `This API key lacks the required scope: ${missingList.join(", ")}. ` +
+      `Grant the key the "${scope}" scope (or "admin") and retry.`,
+    instance: new URL(request.url).pathname,
+    extensions: {
+      missingScope: missingList[0],
+      missingScopes: missingList,
+      requiredScopes: [scope],
+    },
+  });
+}
 
 export interface ApiRouteOptions<TBody extends z.ZodTypeAny = any, TQuery extends z.ZodTypeAny = any> {
   /** The name of the route for metrics, e.g. "GET /api/payments" */

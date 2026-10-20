@@ -31,6 +31,12 @@ export async function register() {
     process.env.NEXT_RUNTIME === "nodejs" &&
     process.env.NEXT_PHASE !== "phase-production-build"
   ) {
+    // Install SIGTERM/SIGINT handlers before anything else so a rollout that
+    // terminates the pod mid-boot still drains cleanly. The installer is a
+    // no-op outside production, keeping `next dev` hot reload untouched.
+    const { installShutdownHandlers } = await import("@/lib/lifecycle");
+    installShutdownHandlers();
+
     const { bootstrap } = await import("@/lib/startup");
     await bootstrap();
 

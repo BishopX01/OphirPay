@@ -2,6 +2,7 @@
 
 import { PrismaClient, Prisma } from "@prisma/client";
 import { logger } from "@/lib/logger";
+import { beginAsyncOperation, registerShutdownTask } from "@/lib/lifecycle";
 
 export { Prisma, PrismaClient };
 
@@ -47,12 +48,16 @@ const prismaClientSingleton = () => {
     query: {
       $allModels: {
         async $allOperations({ operation, model, args, query }) {
+          // Count the query as in-flight so graceful shutdown waits for it
+          // instead of disconnecting the pool underneath it (issue lifecycle).
+          const release = beginAsyncOperation();
           const start = performance.now();
           try {
             return await query(args);
           } finally {
             const duration = performance.now() - start;
             checkConnectionAcquisitionWait(duration, operation, model);
+            release();
           }
         },
       },
@@ -73,6 +78,17 @@ export default prisma;
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
+
+/**
+ * Close the Prisma connection pool. Registered as a graceful-shutdown task so
+ * SIGTERM/SIGINT drain in-flight queries before the sockets close; also
+ * exported for scripts and tests that manage their own lifecycle.
+ */
+export async function disconnectPrisma(): Promise<void> {
+  await prisma.$disconnect();
+}
+
+registerShutdownTask({ name: "prisma", run: disconnectPrisma });
 
 interface PrismaMetricGauge {
   key: string;

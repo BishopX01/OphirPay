@@ -25,6 +25,7 @@ import {
   validateKeyFormat,
   API_KEY_LOOKUP_PATTERN,
 } from "@/lib/api-key-format";
+import { hasSessionCookie, verifyCsrfForRequest } from "@/lib/csrf-token";
 
 const RATE_LIMIT_MAX = getRateLimitMax();
 
@@ -48,6 +49,43 @@ export async function proxy(request: NextRequest) {
     // 1. Strict CORS preflight handling (#1393)
     if (request.method === "OPTIONS") {
       return handleCorsPreflight(request, { allowCredentials: true });
+    }
+
+    // 1b. CSRF defense-in-depth for cookie-authenticated browser sessions.
+    //
+    // Route handlers already call verifyCsrf(), but a single central check
+    // closes the gap for any future mutating route that forgets to. It applies
+    // only when a session cookie is present: login has no session yet, and
+    // API-key/cron callers bypass the double-submit check in
+    // verifyCsrfForRequest(). Reads and preflights are untouched.
+    if (
+      hasSessionCookie(request.headers.get("cookie")) &&
+      !verifyCsrfForRequest(request)
+    ) {
+      logger.request(
+        request.method,
+        pathname,
+        403,
+        performance.now() - startedAt,
+        requestId
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "CSRF_INVALID",
+            message:
+              "Invalid or missing CSRF token. Refresh the page and try again.",
+          },
+        },
+        {
+          status: 403,
+          headers: {
+            "X-Request-Id": requestId,
+            "Cache-Control": "no-store",
+          },
+        }
+      );
     }
 
     // 2. Edge API key validation (#1397): reject malformed keys before DB lookup

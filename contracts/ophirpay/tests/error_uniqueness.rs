@@ -332,6 +332,7 @@ fn all_variants() -> Vec<(&'static str, u32)> {
         ("InvalidThreshold", PaymentError::InvalidThreshold as u32),
         ("EmptySignersList", PaymentError::EmptySignersList as u32),
         ("DisputeCoolingOffActive", PaymentError::DisputeCoolingOffActive as u32),
+        ("SpendingLimitExceeded", PaymentError::SpendingLimitExceeded as u32),
     ]
 }
 
@@ -385,8 +386,8 @@ fn variant_count_matches_catalog() {
     // which is what the sibling `max_code == variants.len()` assertion catches.
     assert_eq!(
         variants.len(),
-        316,
-        "Expected 316 PaymentError variants (codes 1..=316)"
+        317,
+        "Expected 317 PaymentError variants (codes 1..=317)"
     );
 }
 

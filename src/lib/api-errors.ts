@@ -105,6 +105,11 @@ export interface ProblemInput {
   instance?: string;
   /** Per-field validation failures. */
   errors?: ProblemFieldError[];
+  /**
+   * Additional problem-specific extension members (e.g. `missingScope` on an
+   * INSUFFICIENT_SCOPE 403). Core RFC 9457 members always win on collision.
+   */
+  extensions?: Record<string, unknown>;
   /** Extra response headers (e.g. `Retry-After` on a 409/429). */
   headers?: Record<string, string>;
 }
@@ -120,6 +125,7 @@ export interface ProblemInput {
 export function formatProblemDetails(input: ProblemInput): NextResponse {
   const title = input.title ?? problemTitleForStatus(input.status);
   const body: ProblemDetails = {
+    ...(input.extensions ?? {}),
     type: problemTypeFor(input.code),
     title,
     status: input.status,
