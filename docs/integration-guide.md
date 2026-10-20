@@ -47,6 +47,47 @@ stellar contract invoke \
 
 ## Integration Patterns
 
+## Retries and idempotency
+
+Every mutation that creates a payment, batch, escrow or stream requires an
+`Idempotency-Key` header. Send a value that is unique per logical operation and
+**reuse it verbatim when retrying** — that is what makes the retry safe:
+
+```typescript
+const key = crypto.randomUUID(); // one per operation, not per attempt
+
+async function createPayment(body: object) {
+  const res = await fetch("/api/payments", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.OPHIRPAY_API_KEY}`,
+      "Idempotency-Key": key,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 409 && res.headers.get("Idempotency-Replay") === "true") {
+    // The operation already happened: `res.json()` is the original response.
+    return res.json();
+  }
+  if (res.status === 409) {
+    // `Retry-After` — the first attempt is still in flight; back off.
+  }
+  return res.json();
+}
+```
+
+Successful responses are cached for 24 hours. A repeat returns `409` with the
+original body, `Idempotency-Replay: true` and `X-Original-Status: <code>`; a
+concurrent duplicate returns `409` with `Retry-After` and
+`code: OPERATION_IN_PROGRESS`. Never generate a new key for an automatic retry
+— that is indistinguishable from a deliberate second payment.
+
+`@ophirpay/client` generates a UUID per POST for you, and you can pass your own
+via `client.createPayment(body, { idempotencyKey })` to make a retry in your own
+code reuse it.
+
 ## Type-safe SDK (generated from the OpenAPI spec)
 
 `docs/openapi.yaml` is the source of truth for the API. `@ophirpay/client` ships

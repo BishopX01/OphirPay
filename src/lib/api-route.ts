@@ -3,10 +3,144 @@
 
 import { z } from "zod";
 import { getAuthContext } from "@/lib/auth-session";
-import { unauthorizedError, validationError, handleApiError } from "@/lib/api-response";
+import {
+  badRequestError,
+  conflictError,
+  unauthorizedError,
+  validationError,
+  handleApiError,
+} from "@/lib/api-response";
 import { verifyCsrf } from "@/lib/csrf";
 import { withMetrics } from "@/lib/metrics-middleware";
 import { withRequestLogging } from "@/lib/request-logging";
+import { idempotencyKeySchema } from "@/lib/validation-schemas";
+import { claimIdempotencyKey } from "@/lib/idempotency";
+import { ERROR_CODES } from "@/lib/error-codes";
+
+/** Header that makes a mutation safely retryable (issue #1440). */
+export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+
+/** What a caller sees when the key is already being processed. */
+export const IDEMPOTENCY_IN_PROGRESS_MESSAGE =
+  "A request with this Idempotency-Key is already being processed. Retry after the indicated delay.";
+
+/**
+ * Read and validate the required `Idempotency-Key` header.
+ *
+ * Every POST that can move funds requires one: without it, a network retry or
+ * a double-clicked submit creates a second payment/escrow/stream on-chain, and
+ * the client has no safe way to retry a request whose response it never saw.
+ *
+ * A missing or malformed key is rejected *before* any work happens, and never
+ * silently replaced by a generated value — a server-generated key makes every
+ * retry a fresh mutation, which is the exact failure this guard exists to
+ * prevent.
+ *
+ * @example
+ * ```ts
+ * const idempotency = requireIdempotencyKey(request);
+ * if (!idempotency.ok) return idempotency.response;
+ * return withIdempotency(request, { userId: auth.userId, key: idempotency.key }, async () => {
+ *   // … create the record …
+ * });
+ * ```
+ */
+export function requireIdempotencyKey(
+  request: Request
+): { ok: true; key: string } | { ok: false; response: Response } {
+  const raw = request.headers.get(IDEMPOTENCY_KEY_HEADER.toLowerCase());
+  if (raw === null) {
+    return {
+      ok: false,
+      response: badRequestError(
+        `${IDEMPOTENCY_KEY_HEADER} header is required for this request. ` +
+          "Send a unique value per logical operation and reuse it when retrying."
+      ),
+    };
+  }
+  const parsed = idempotencyKeySchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, response: validationError(parsed.error) };
+  }
+  return { ok: true, key: parsed.data };
+}
+
+/**
+ * Run a mutation at most once per `(userId, key)`.
+ *
+ * The first request claims a short lease, runs the handler and caches its
+ * successful response for 24 h (`IDEMPOTENCY_RESPONSE_TTL_SECONDS`). Any
+ * later request carrying the same key is answered with
+ * **HTTP 409 Conflict and the byte-identical body of the original response**
+ * (plus `Idempotency-Replay: true` and `X-Original-Status`), which is what
+ * lets a retrying client reconcile instead of submitting a second payment.
+ * A concurrent duplicate that is still in flight gets 409 with `Retry-After`.
+ *
+ * Failures are never cached: a handler that throws or returns a non-2xx
+ * releases the lease immediately, so the client can correct the request and
+ * retry with the same key. Without Redis the handler still runs (the route
+ * keeps whatever durable guarantee it has); correctness of the money movement
+ * never depends on the cache being available.
+ */
+export async function withIdempotency(
+  request: Request,
+  options: { userId: string; key: string },
+  handler: (request: Request) => Promise<Response> | Response
+): Promise<Response> {
+  const { userId, key } = options;
+  const claim = await claimIdempotencyKey(userId, key);
+
+  if (claim.status === "replay") {
+    // Deliberately 409, not the original 2xx: the caller must be able to tell
+    // "your earlier attempt already happened" from "this attempt succeeded",
+    // or a retry loop looks successful twice. The body is exactly what the
+    // first attempt returned.
+    return Response.json(claim.response.body, {
+      status: 409,
+      headers: {
+        "Idempotency-Replay": "true",
+        "X-Original-Status": String(claim.response.status),
+      },
+    });
+  }
+
+  if (claim.status === "in-flight") {
+    return conflictError(
+      IDEMPOTENCY_IN_PROGRESS_MESSAGE,
+      { "Retry-After": String(claim.retryAfterSeconds) },
+      ERROR_CODES.OPERATION_IN_PROGRESS
+    );
+  }
+
+  let response: Response;
+  try {
+    response = await handler(request);
+  } catch (err) {
+    // Never pin the key on an exception — that would turn a transient 500 into
+    // a 24 h outage for this operation.
+    if (claim.status === "acquired") await claim.release().catch(() => {});
+    throw err;
+  }
+
+  if (claim.status !== "acquired") return response;
+
+  if (!response.ok) {
+    await claim.release();
+    return response;
+  }
+
+  try {
+    await claim.remember({
+      status: response.status,
+      body: await response.clone().json(),
+    });
+  } catch {
+    // A non-JSON success body cannot be replayed; free the key so the next
+    // retry can at least reach the route's own guards.
+    await claim.release();
+  }
+  return response;
+}
 
 export interface ApiRouteOptions<TBody extends z.ZodTypeAny = any, TQuery extends z.ZodTypeAny = any> {
   /** The name of the route for metrics, e.g. "GET /api/payments" */

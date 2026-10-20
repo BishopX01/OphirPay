@@ -814,6 +814,7 @@ export interface ApiResponseBodies {
     "201": unknown;
     "400": ErrorResponse;
     "401": ErrorResponse;
+    "409": ErrorResponse;
   };
   postApiFeeConfig: {
     "200": unknown;
@@ -893,6 +894,7 @@ export interface ApiResponseBodies {
     "201": PaymentEnvelopeResponse;
     "400": ProblemDetails;
     "401": ProblemDetails;
+    "409": PaymentEnvelopeResponse;
     "500": ProblemDetails;
   };
   postApiPaymentsCancel: {
@@ -952,6 +954,7 @@ export interface ApiResponseBodies {
     "201": unknown;
     "400": ErrorResponse;
     "401": ErrorResponse;
+    "409": ErrorResponse;
   };
   postApiWebhooks: {
     "201": unknown;
@@ -1384,12 +1387,14 @@ export interface ApiHeaderParams {
   patchApiWebhooks: Record<string, never>;
   postApiAuthSession: Record<string, never>;
   postApiBatches: {
-    "Idempotency-Key"?: string;
+    "Idempotency-Key": string;
   };
   postApiBatchesId: Record<string, never>;
   postApiCron: Record<string, never>;
   postApiCspReport: Record<string, never>;
-  postApiEscrows: Record<string, never>;
+  postApiEscrows: {
+    "Idempotency-Key": string;
+  };
   postApiFeeConfig: Record<string, never>;
   postApiGovernanceExecute: Record<string, never>;
   postApiGovernanceProposals: Record<string, never>;
@@ -1402,7 +1407,9 @@ export interface ApiHeaderParams {
   postApiMultisigApprove: Record<string, never>;
   postApiMultisigExecute: Record<string, never>;
   postApiMultisigPropose: Record<string, never>;
-  postApiPayments: Record<string, never>;
+  postApiPayments: {
+    "Idempotency-Key": string;
+  };
   postApiPaymentsCancel: Record<string, never>;
   postApiPaymentsRetry: Record<string, never>;
   postApiRbac: Record<string, never>;
@@ -1413,7 +1420,9 @@ export interface ApiHeaderParams {
   postApiRequestsIdRemind: Record<string, never>;
   postApiScheduled: Record<string, never>;
   postApiScheduledRun: Record<string, never>;
-  postApiStreams: Record<string, never>;
+  postApiStreams: {
+    "Idempotency-Key": string;
+  };
   postApiWebhooks: Record<string, never>;
   postApiWebhooksIdDeliveriesDeliveryIdRedeliver: Record<string, never>;
   postApiWebhooksIdDeliveriesRequeue: Record<string, never>;

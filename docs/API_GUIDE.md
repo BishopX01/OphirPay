@@ -287,6 +287,44 @@ return successResponse(payment, undefined, 201);            // 201 created
 
 Clients check `success` first; `code` is stable for programmatic handling.
 
+### Idempotent mutations (`Idempotency-Key`) #1440
+
+Every POST route that moves (or prepares) funds — `/api/payments`,
+`/api/batches`, `/api/escrows`, `/api/streams` — **requires** an
+`Idempotency-Key` header. Use one value per logical operation and reuse it when
+retrying:
+
+```http
+POST /api/payments
+Idempotency-Key: 42ce12b8-4d15-4a34-8f52-7b2136a84462
+Content-Type: application/json
+
+{ "amount": 25, "sourceAccountId": "G...", "destAddress": "G..." }
+```
+
+In a route, the guards live in `src/lib/api-route.ts`:
+
+```ts
+const idempotency = requireIdempotencyKey(request);   // 400 when absent/short
+if (!idempotency.ok) return idempotency.response;
+
+return withIdempotency(request, { userId: auth.userId, key: idempotency.key }, async () => {
+  return successResponse(await createTheThing(), undefined, 201);
+});
+```
+
+| Situation | Response |
+|---|---|
+| No key, or shorter than 8 / longer than 255 characters | `400` before any work |
+| First successful request | Normal `2xx`; its status and body are cached for **24 h** |
+| Repeat after completion | `409` + the **original body**, `Idempotency-Replay: true`, `X-Original-Status: <code>` |
+| Repeat while the first is still running | `409` + `Retry-After`, code `OPERATION_IN_PROGRESS` |
+| Route failed (non-2xx / threw) | Lease released immediately — retry with the same key |
+
+The cache is Redis-backed (`src/lib/idempotency.ts`); without Redis the route
+still runs, and each route keeps its durable guard where it has one (batches
+rely on the `(userId, idempotencyKey)` unique index).
+
 ### Keyset & Cursor-Based Pagination (#1361)
 
 For deep collections (such as `/api/audit-log` or enterprise payment lists), offset pagination (`skip`/`take`) causes performance degradation on Postgres. Keyset cursor-based pagination uses indexed columns (`createdAt`, `id`) with `cursor: { id }` and `take: limit + 1`:

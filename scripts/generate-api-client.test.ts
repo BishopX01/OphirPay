@@ -67,7 +67,8 @@ describe("generated typed SDK (issue #1439)", () => {
     // Concrete, spot-checkable typings.
     expect(types).toMatch(/postApiPayments: CreatePaymentRequest;/);
     expect(types).toMatch(/postApiBatches: CreateBatchRequest;/);
-    expect(types).toMatch(/"Idempotency-Key"\?: string;/);
+    // The header is required on every money-moving POST (issue #1440).
+    expect(types).toMatch(/"Idempotency-Key": string;/);
     expect(types).toMatch(/export interface PaymentResponse \{/);
   });
 

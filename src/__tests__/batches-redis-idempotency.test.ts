@@ -130,7 +130,7 @@ describe("POST /api/batches — Redis idempotency claim", () => {
     expect(mockBatchCreate).toHaveBeenCalled();
   });
 
-  it("does not claim anything when the client sends no key", async () => {
+  it("rejects a request with no key before claiming anything", async () => {
     const request = new Request("http://localhost/api/batches", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...csrfHeaders() },
@@ -147,13 +147,14 @@ describe("POST /api/batches — Redis idempotency claim", () => {
     });
 
     const res = await POST(request);
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
     expect(mockClaim).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
   });
 
-  it("replays a completed request as 201 with Idempotent-Replay", async () => {
+  it("answers a repeated key with 409 and the original 201 body", async () => {
     // Stored as the JSON text Redis holds, so the replay is byte-identical
-    // rather than re-serialized from JavaScript objects.
+    // rather than re-serialized from JavaScript objects (issue #1440).
     const cached = {
       success: true,
       data: { id: BATCH_ID, name: "August payroll", status: "CREATED" },
@@ -166,8 +167,9 @@ describe("POST /api/batches — Redis idempotency claim", () => {
 
     const res = await POST(makeRequest());
 
-    expect(res.status).toBe(201);
-    expect(res.headers.get("Idempotent-Replay")).toBe("true");
+    expect(res.status).toBe(409);
+    expect(res.headers.get("Idempotency-Replay")).toBe("true");
+    expect(res.headers.get("X-Original-Status")).toBe("201");
     expect(await res.json()).toEqual(cached);
     // A replay must not touch the database: that is the point of caching it.
     expect(mockTransaction).not.toHaveBeenCalled();
@@ -175,9 +177,9 @@ describe("POST /api/batches — Redis idempotency claim", () => {
     expect(remember).not.toHaveBeenCalled();
   });
 
-  it("replays a cached deduplicated 200 with its original status", async () => {
-    // The first request may itself have been a database-level dedupe; a replay
-    // must not promote that 200 to a 201 the client never received.
+  it("reports the original status of a cached deduplicated 200", async () => {
+    // The first request may itself have been a database-level dedupe; the
+    // replay must not pretend it was a 201 the client never received.
     mockClaim.mockResolvedValue({
       status: "replay",
       response: {
@@ -188,8 +190,9 @@ describe("POST /api/batches — Redis idempotency claim", () => {
 
     const res = await POST(makeRequest());
 
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Idempotent-Replay")).toBe("true");
+    expect(res.status).toBe(409);
+    expect(res.headers.get("Idempotency-Replay")).toBe("true");
+    expect(res.headers.get("X-Original-Status")).toBe("200");
   });
 
   it("rejects a concurrent attempt with 409 and Retry-After", async () => {

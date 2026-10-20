@@ -167,6 +167,17 @@ paths:
     post:
       tags: [Payments]
       summary: Create a payment
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: >-
+            Required. A unique value per logical payment; reuse the same key
+            when retrying after a network error. The first successful request
+            stores the response for 24 hours, and a repeat with the same key
+            answers 409 with that exact body (plus `Idempotency-Replay: true`)
+            instead of creating a second payment.
       requestBody:
         required: true
         content:
@@ -227,6 +238,16 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
+        "409":
+          description: >-
+            This Idempotency-Key was already used. The body is the original
+            response; `Idempotency-Replay: true` and `X-Original-Status` identify
+            it as a replay. If the first request is still in flight, the body is
+            an error with code `OPERATION_IN_PROGRESS` and a `Retry-After` header.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentEnvelopeResponse"
         "500":
           description: RFC 7807 problem details — an unexpected server failure.
           content:
@@ -468,6 +489,15 @@ paths:
       tags: [Escrows]
       summary: Create an on-chain escrow
       security: [{ ApiKeyAuth: [] }, { BearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: >-
+            Required. Reuse the same key when retrying; a repeat returns 409
+            with the original response body instead of a second set of
+            parameters to sign.
       requestBody:
         required: true
         content:
@@ -489,6 +519,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /api/escrows/{id}:
     get:
@@ -526,6 +558,15 @@ paths:
       tags: [Streams]
       summary: Create an on-chain payment stream
       security: [{ ApiKeyAuth: [] }, { BearerAuth: [] }]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: >-
+            Required. Reuse the same key when retrying; a repeat returns 409
+            with the original response body instead of a second set of
+            parameters to sign.
       requestBody:
         required: true
         content:
@@ -547,6 +588,8 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   /api/streams/{id}:
     get:
@@ -819,15 +862,14 @@ paths:
       parameters:
         - name: Idempotency-Key
           in: header
-          required: false
+          required: true
           schema: { type: string, minLength: 8, maxLength: 255 }
           description: >-
-            Per-user key that makes submission idempotent. Re-sending the same
-            key returns the already-created batch (200) instead of double
-            sending; if the first attempt crashed before inserting child
-            payments, a retry resumes only the missing ones. An equivalent
-            `idempotencyKey` body field is accepted when no header is sent, but
-            the header takes precedence.
+            Required. Per-user key that makes submission idempotent. Re-sending
+            the same key returns 409 with the original response body instead of
+            double sending; if the first attempt crashed before inserting child
+            payments, a retry resumes only the missing ones. The deprecated
+            `idempotencyKey` body field is still accepted but ignored.
       requestBody:
         required: true
         content:
