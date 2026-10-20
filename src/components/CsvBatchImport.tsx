@@ -183,7 +183,9 @@ export function CsvBatchImport({
               data-testid="csv-summary"
             >
               {rows.length} row{rows.length !== 1 ? "s" : ""}
-              {errorCount > 0
+              {fileErrors.length > 0
+                ? " · import blocked"
+                : errorCount > 0
                 ? ` · ${errorCount} with error${errorCount !== 1 ? "s" : ""}`
                 : " · all rows valid"}
             </p>

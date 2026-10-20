@@ -203,6 +203,8 @@ describe("CsvBatchImport", () => {
     ).toBeInTheDocument();
     expect(screen.queryByTestId("csv-preview-table")).toBeNull();
     expect(screen.queryByTestId("csv-row-errors")).toBeNull();
+    // Zero parsed rows with a file error must not read as "all rows valid".
+    expect(screen.getByTestId("csv-summary")).toHaveTextContent(/import blocked/i);
   });
 
   it("flags memos within 28 characters but over the server's 28-byte limit", async () => {
