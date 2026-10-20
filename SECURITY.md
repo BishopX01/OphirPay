@@ -236,9 +236,10 @@ import { verifyCsrf } from "@/lib/csrf";
 OphirPay implements the following security headers
 ([`next.config.ts`](next.config.ts) is the single source of truth for static headers;
 `src/proxy.ts` sets the per-request `Content-Security-Policy` and violation-reporting headers):
-- For the layer-by-layer effective policy, including Vercel behavior, API
-  overrides, and the production CSP limitation, see
-  [Security Header Policy](docs/SECURITY_HEADERS.md).
+- For the CSP directives, nonce flow and maintenance procedure, see
+  [Security Headers & Content Security Policy](docs/SECURITY.md).
+- For the layer-by-layer effective policy, including Vercel behavior and API
+  overrides, see [Security Header Policy](docs/SECURITY_HEADERS.md).
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
 - `Referrer-Policy: strict-origin-when-cross-origin`

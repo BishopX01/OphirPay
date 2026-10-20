@@ -47,6 +47,10 @@ export const CSP_POLICY = {
   objectSrc: ["'none'"],
   baseUri: ["'self'"],
   formAction: ["'self'"],
+  // Belt-and-braces clickjacking defence alongside X-Frame-Options: DENY;
+  // modern browsers honour frame-ancestors and ignore the header when both
+  // are present.
+  frameAncestors: ["'none'"],
   reportingGroup: "csp-endpoint",
   reportUri: "/api/csp-report",
 } as const;
@@ -92,6 +96,7 @@ export function buildCsp(
     ["object-src", CSP_POLICY.objectSrc],
     ["base-uri", CSP_POLICY.baseUri],
     ["form-action", CSP_POLICY.formAction],
+    ["frame-ancestors", CSP_POLICY.frameAncestors],
     ["report-to", [CSP_POLICY.reportingGroup]],
     ["report-uri", [CSP_POLICY.reportUri]],
   ];

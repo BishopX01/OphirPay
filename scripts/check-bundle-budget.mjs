@@ -14,10 +14,13 @@
 // webpack-only build just to measure the bundle.
 //
 // Usage:
-//   node scripts/check-bundle-budget.mjs [buildDir]
+//   node scripts/check-bundle-budget.mjs [buildDir] [--json=<path>]
 // Environment:
 //   NEXT_BUILD_DIR      build output directory (default: .next)
 //   GITHUB_STEP_SUMMARY written to when running in CI
+//
+// `--json=<path>` writes the measured per-route/per-chunk sizes so
+// `scripts/bundle-diff.mjs` can compare two branches (see docs/PERFORMANCE.md).
 //
 // Exit code 0 when every route is within budget, 1 otherwise (with a per-route
 // breakdown naming the chunks that dominate the route).
@@ -28,9 +31,27 @@ import zlib from "node:zlib";
 
 const ROOT = process.cwd();
 const BUDGET_FILE = path.join(ROOT, "bundle-budget.json");
+
+// Parse `--json <path>` / `--json=<path>` without treating the value as the
+// positional build directory. The positional [buildDir] form is retained for
+// backwards compatibility with the existing CI step.
+const cliArgs = process.argv.slice(2);
+let jsonPath = process.env.BUNDLE_REPORT_JSON || null;
+const positional = [];
+for (let i = 0; i < cliArgs.length; i += 1) {
+  const arg = cliArgs[i];
+  if (arg === "--json") {
+    jsonPath = cliArgs[++i] ?? null;
+  } else if (arg.startsWith("--json=")) {
+    jsonPath = arg.slice("--json=".length);
+  } else {
+    positional.push(arg);
+  }
+}
+
 const NEXT_DIR =
   process.env.NEXT_BUILD_DIR ||
-  process.argv[2] ||
+  positional[0] ||
   path.join(ROOT, ".next");
 const APP_SERVER_DIR = path.join(NEXT_DIR, "server", "app");
 
@@ -168,6 +189,28 @@ const fmt = (n) => n.toFixed(1).padStart(8);
 const rows = [...byRoute.values()].sort((a, b) => b.totalBytes - a.totalBytes);
 const failures = [];
 let untracked = 0;
+
+// Machine-readable report consumed by scripts/bundle-diff.mjs. Written before
+// the verdict so a budget failure still leaves a comparable artifact behind.
+if (jsonPath) {
+  const report = {
+    generatedAt: new Date().toISOString(),
+    buildDir: NEXT_DIR,
+    gitRef: process.env.GITHUB_SHA || null,
+    routes: rows.map((row) => ({
+      route: row.route,
+      totalBytes: row.totalBytes,
+      budgetKb: routeBudgets[row.route] ?? defaultBudgetKb,
+      chunks: row.chunks.map((chunk) => ({
+        chunk: chunk.chunk,
+        bytes: chunk.bytes,
+      })),
+    })),
+  };
+  fs.mkdirSync(path.dirname(path.resolve(jsonPath)), { recursive: true });
+  fs.writeFileSync(path.resolve(jsonPath), `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`\n📝 Bundle report written to ${jsonPath}`);
+}
 
 console.log("\n📦 JavaScript bundle budget (first-load JS, gzip)\n");
 console.log(

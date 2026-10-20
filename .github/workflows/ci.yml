@@ -115,6 +115,58 @@ jobs:
         run: node scripts/check-bundle-budget.mjs
 
   # ══════════════════════════════════════════════════════════════
+  # 4b. BUNDLE ANALYSIS — compare PR first-load JS with the base branch
+  #     Builds both refs (the `build` job only measures the PR) and posts a
+  #     route-by-route diff to the job summary. Fails if a route exceeds the
+  #     committed budget; warns on unusual growth. See docs/PERFORMANCE.md.
+  # ══════════════════════════════════════════════════════════════
+  bundle-analysis:
+    name: "1️⃣3️⃣ Performance — Bundle Diff"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base SHA has to be fetchable for the comparison build.
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-node-prisma # node-version-file: '.nvmrc'
+      - name: Build PR and measure first-load JS
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bundle
+          npm run build
+          node scripts/check-bundle-budget.mjs --json=/tmp/bundle/head.json
+      - name: Build base branch and measure first-load JS
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/ophirpay-base "$BASE_SHA"
+          cd /tmp/ophirpay-base
+          npm ci --no-audit --no-fund
+          npx prisma generate
+          npm run build
+          cd "$GITHUB_WORKSPACE"
+          # The base branch may legitimately be over a budget this PR is
+          # changing; only the comparison matters here.
+          NEXT_BUILD_DIR=/tmp/ophirpay-base/.next \
+            node scripts/check-bundle-budget.mjs --json=/tmp/bundle/base.json || true
+      - name: Compare PR bundle against base and publish the summary
+        env:
+          # A route growing by more than this is flagged for review (not a
+          # hard failure). Budget breaches are hard failures.
+          BUNDLE_GROWTH_WARN_KB: "10"
+        run: node scripts/bundle-diff.mjs /tmp/bundle/base.json /tmp/bundle/head.json
+      - name: Upload bundle reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-report
+          path: /tmp/bundle/*.json
+          retention-days: 14
+
+  # ══════════════════════════════════════════════════════════════
   # 5. CONTRACT WASM BUILD — Build both Soroban contracts
   # ══════════════════════════════════════════════════════════════
   contract-wasm:
@@ -289,9 +341,12 @@ jobs:
       - run: node scripts/validate-grafana-dashboard.mjs
 
   # ══════════════════════════════════════════════════════════════
-  # 8. HELM LINT — chart lint + render assertions (issue #684)
+  # 8. HELM LINT — chart lint + value validation + render assertions
+  #    (#684, values validation)
   #    Proves the autoscaling / pdb / networkPolicy / serviceAccount
-  #    values actually produce objects instead of being inert.
+  #    values actually produce objects instead of being inert, and that the
+  #    chart rejects invalid values before they reach a cluster. Runs on every
+  #    PR (not only helm/ changes) so k8s/ manifest drift cannot slip through.
   # ══════════════════════════════════════════════════════════════
   helm-lint:
     name: "1️⃣9️⃣ Infra — Helm (Lint + Render)"
@@ -318,6 +373,29 @@ jobs:
             --set pdb.enabled=true \
             --set networkPolicy.enabled=true \
             --set serviceAccount.create=true
+      - name: Lint the chart with CI values
+        # values.ci.yaml fills the values production intentionally leaves empty
+        # (secrets) and exercises every opt-in resource. --strict turns lint
+        # warnings into failures, so a malformed template cannot pass silently.
+        run: helm lint helm/ophirpay --strict -f helm/ophirpay/values.ci.yaml
+      - name: Reject invalid values with a clear error
+        # Acceptance criterion: misconfigured values fail during CI, not at
+        # deploy time. values.schema.json must name the offending field.
+        run: |
+          set -euo pipefail
+          bad_values="$(mktemp)"
+          printf 'replicaCount: two\nresources:\n  limits:\n    cpu: lots\n' > "$bad_values"
+          if helm lint helm/ophirpay --strict -f "$bad_values" >/tmp/invalid-values.log 2>&1; then
+            echo "::error::helm lint accepted invalid values — values.schema.json is not being enforced"
+            exit 1
+          fi
+          if ! grep -q "replicaCount" /tmp/invalid-values.log; then
+            echo "::error::helm lint failed but did not identify 'replicaCount' in its output"
+            cat /tmp/invalid-values.log
+            exit 1
+          fi
+          echo "✅ Invalid values were rejected with a field-level error (replicaCount):"
+          grep -E "replicaCount|Error:" /tmp/invalid-values.log | sed 's/^/   /'
       - name: Render and assert the flag-gated objects
         run: |
           set -euo pipefail
@@ -340,6 +418,10 @@ jobs:
             --set networkPolicy.enabled=false \
             --set serviceAccount.create=false \
             > /tmp/disabled.yaml
+
+          # CI values: required secrets populated, every feature flag on.
+          helm template ophirpay helm/ophirpay -f helm/ophirpay/values.ci.yaml \
+            > /tmp/ci-values.yaml
 
           fail=0
           expect() {
@@ -379,11 +461,18 @@ jobs:
 
           exit "$fail"
       
-      - name: Validate with kubeconform
+      - name: Validate rendered manifests with kubeconform (Kubernetes 1.28)
+        # Pinned to the oldest Kubernetes version the chart supports so a
+        # manifest using a newer API field fails here rather than on an old
+        # cluster.
         run: |
-          kubeconform -strict -summary /tmp/default.yaml
-          kubeconform -strict -summary /tmp/enabled.yaml
-          kubeconform -strict -summary /tmp/disabled.yaml
+          for manifest in /tmp/default.yaml /tmp/enabled.yaml /tmp/disabled.yaml /tmp/ci-values.yaml; do
+            echo "::group::kubeconform $manifest"
+            kubeconform -strict -summary -kubernetes-version 1.28.0 "$manifest"
+            echo "::endgroup::"
+          done
+      - name: Validate the raw k8s/ manifests with kubeconform
+        run: kubeconform -strict -summary -kubernetes-version 1.28.0 k8s/
 
       - name: Assert rendered config keys against .env.example
         # AC of #730: a broken template or an unknown config key must fail the
