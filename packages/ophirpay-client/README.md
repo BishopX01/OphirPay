@@ -56,9 +56,27 @@ const ok = verifyWebhookSignature({
 ## Regenerating the catalogue
 
 ```bash
-npm run client:generate   # rewrite operations.generated.{js,d.ts}
-npm run client:check      # fail if the committed output is stale (CI)
+npm run generate:sdk      # rewrite operations.generated.* AND api-types.generated.d.ts
+npm run generate:sdk -- --check   # fail if the committed output is stale (CI)
 ```
+
+`api-types.generated.d.ts` types both sides of every documented operation:
+
+```ts
+import type {
+  ApiRequestBodies,
+  ApiResponseBodies,
+  ApiHeaderParams,
+} from "@ophirpay/client";
+
+const body: ApiRequestBodies["postApiPayments"] = { amount: 25, assetCode: "XLM" };
+type Created = ApiResponseBodies["postApiPayments"]["201"];
+const headers: ApiHeaderParams["postApiBatches"] = { "Idempotency-Key": crypto.randomUUID() };
+```
+
+Every entry is derived from `docs/openapi.yaml`, so a spec change that is not
+regenerated fails CI (`generate:sdk -- --check`) rather than reaching an
+integrator.
 
 ## Versioning
 

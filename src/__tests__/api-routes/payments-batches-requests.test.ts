@@ -74,6 +74,15 @@ import { invalidateCaches } from "@/lib/api-cache";
 
 // Keep the real cache behaviour, but observe the invalidation calls a mutation
 // makes (#741).
+// Idempotency leases are covered by idempotency.test.ts and
+// idempotency-routes.test.ts; stub the claim to "no broker" here so these
+// cases stay hermetic and independent of a local Redis.
+vi.mock("@/lib/idempotency", () => ({
+  claimIdempotencyKey: vi.fn().mockResolvedValue({ status: "unavailable" }),
+  IDEMPOTENCY_RESPONSE_TTL_SECONDS: 24 * 60 * 60,
+  IDEMPOTENCY_LOCK_TTL_SECONDS: 120,
+}));
+
 vi.mock("@/lib/api-cache", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api-cache")>();
   return {
@@ -88,10 +97,23 @@ function csrfHeaders(): Record<string, string> {
   return { "x-csrf-token": token, cookie: `__Host-csrf=${token}` };
 }
 
+/** Unique per request so one case can never replay another's response. */
+let idempotencyCounter = 0;
+function freshIdempotencyKey(): string {
+  idempotencyCounter += 1;
+  return `test-idempotency-key-${idempotencyCounter}`;
+}
+
 function mutatingRequest(url: string, method: string, body?: unknown): Request {
   return new Request(url, {
     method,
-    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    headers: {
+      "Content-Type": "application/json",
+      // Required by the money-moving POST routes (issue #1440); ignored by
+      // the other mutations.
+      "Idempotency-Key": freshIdempotencyKey(),
+      ...csrfHeaders(),
+    },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 }

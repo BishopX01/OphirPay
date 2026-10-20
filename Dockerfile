@@ -1,3 +1,19 @@
+# ── Multi-architecture builds (issue #1438) ─────────────────────
+#
+# This file is built for linux/amd64 AND linux/arm64 by
+# .github/workflows/docker-multiarch.yml. Nothing here is architecture-specific:
+# every stage runs per target platform (under QEMU for the non-native one), so
+# `prisma generate` produces the native query engine for the platform being
+# built, and that engine is what the runner stage copies. The implicit buildx
+# build args (TARGETPLATFORM/TARGETARCH/TARGETOS) are not consumed here — they
+# do not need to be, because buildx already runs every stage for the target
+# platform.
+#
+# There is deliberately no `--platform=` pin and no architecture-conditional
+# `apt-get install`: node:24-slim publishes both architectures, and the only
+# native artifacts (Prisma engines, Next's SWC binary) are resolved by npm for
+# the target platform inside the builder stage.
+
 # Stage 1: Dependencies (full install — the build needs devDependencies:
 # TypeScript, Prisma CLI, Tailwind, ESLint are all required by `next build`)
 #
@@ -33,7 +49,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
-# Generate the Prisma client before building (required at runtime)
+# Generate the Prisma client before building (required at runtime).
+#
+# NOTE (multi-arch): this must stay inside the per-platform builder stage. The
+# generated client is resolved from BUILD time for the architecture of *this*
+# stage, which buildx/qemu guarantees is the target platform; moving it to a
+# host-side step would silently ship an amd64 engine inside an arm64 image.
 RUN npx prisma generate
 RUN npm run build
 
