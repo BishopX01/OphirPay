@@ -30,6 +30,7 @@ If you prefer to develop natively on your host machine without containers, conti
 | [Node.js](https://nodejs.org) | 24 (see `.nvmrc`) | Runtime — use `nvm use` if you have nvm |
 | [npm](https://www.npmjs.com) | 9+ (ships with Node) | Package manager |
 | [Git](https://git-scm.com) | Any | Clone the repo |
+| [Rust](https://rustup.rs) | 1.91.0 (see `contracts/rust-toolchain.toml`) | Compiles Soroban smart contracts to WASM |
 | [Freighter Wallet](https://freighter.app) | Latest | Browser extension for signing Stellar transactions |
 | A Stellar account | — | Create one in Freighter, then fund it on Testnet (see §4) |
 
@@ -44,11 +45,42 @@ npm ci
 cp .env.example .env.local
 ```
 
+### 1.1 Soroban Smart Contract Toolchain Setup
+
+Building Soroban smart contracts requires matching toolchain versions (Rust `1.91.0`, `wasm32-unknown-unknown`, `wasm32v1-none`, and `stellar-cli` / `soroban-cli`). Without a deterministic setup, local compilation can result in mismatched WASM hashes compared to CI artifacts.
+
+Run the automated setup script to install the exact toolchain and targets pinned in `contracts/rust-toolchain.toml`:
+
+```bash
+# Install the pinned toolchain, components (rustfmt, clippy), and targets
+./scripts/setup-soroban-env.sh
+
+# Optionally also install stellar-cli via cargo:
+./scripts/setup-soroban-env.sh --install-cli
+```
+
+### 1.2 WASM Reproducibility Verification
+
+To verify that locally compiled contract WASM artifacts match CI golden artifacts byte-for-byte:
+
+```bash
+./scripts/verify-wasm-reproducibility.sh
+```
+
+This builds `contracts/ophirpay` and `contracts/emitter` with deterministic compiler flags (`--locked`, `-C opt-level=z`, `-C link-arg=-s`, and `--remap-path-prefix`) and verifies the SHA-256 hashes against `contracts/expected-wasm-hashes.sha256`.
+
+If the contract sources were intentionally changed, update the committed expected hashes:
+
+```bash
+./scripts/verify-wasm-reproducibility.sh --update
+```
+
 > **Note on `.env` vs `.env.local`:** Next.js loads both, but `.env.local`
 > overrides `.env` and is already git-ignored. Prefer `.env.local` so you never
 > accidentally commit credentials.
 
 ---
+
 
 ## 2. Option A — SQLite (fastest, zero external services)
 
