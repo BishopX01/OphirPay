@@ -9,7 +9,10 @@ use crate::types::*;
 use crate::errors::*;
 use crate::events::*;
 use crate::helpers::*;
-use crate::spending_limit::is_spending_limit_expired;
+use crate::spending_limit::{
+    check_and_update_spending_limit, is_spending_limit_expired, remaining_daily_capacity,
+    remaining_monthly_capacity,
+};
 // ── Contract Version ───────────────────────────────────────────
 pub const CONTRACT_VERSION: u32 = 2;
 

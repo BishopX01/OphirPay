@@ -42,6 +42,60 @@ export const WEBHOOK_TIMESTAMP_HEADER = "X-OphirPay-Timestamp";
 export const WEBHOOK_SIGNATURE_HEADER = "X-OphirPay-Signature";
 export const WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 300;
 
+// ── Retry schedule ─────────────────────────────────────────────
+//
+// `deliverWebhook` retries a few times in-process for a transient blip, but a
+// subscriber outage (502/503, DNS timeout) can outlast a request. Failures are
+// therefore persisted as RETRYING with the next attempt time, and the cron
+// processor drains the queue on this exponential schedule:
+//
+//   attempt 1 →  1 min      attempt 4 →  1 hour
+//   attempt 2 →  5 min      attempt 5 →  4 hours
+//   attempt 3 → 15 min      then DEAD_LETTER
+
+export const WEBHOOK_RETRY_BACKOFF_MS = [
+  60_000,
+  5 * 60_000,
+  15 * 60_000,
+  60 * 60_000,
+  4 * 60 * 60_000,
+] as const;
+
+/** Number of scheduled retries before a delivery is dead-lettered. */
+export const WEBHOOK_MAX_RETRIES = WEBHOOK_RETRY_BACKOFF_MS.length;
+
+/** Maximum deliveries a single cron run will process. */
+export const WEBHOOK_RETRY_QUEUE_BATCH_SIZE = 50;
+
+/**
+ * Delay before the next attempt, given how many scheduled retries have already
+ * run. Returns `null` once the schedule is exhausted (the caller must then
+ * dead-letter the delivery).
+ */
+export function webhookRetryDelayMs(retriesCompleted: number): number | null {
+  const index = Math.max(0, Math.floor(retriesCompleted));
+  return WEBHOOK_RETRY_BACKOFF_MS[index] ?? null;
+}
+
+/** Absolute time of the next attempt, or `null` when retries are exhausted. */
+export function nextWebhookAttemptAt(
+  retriesCompleted: number,
+  from: Date = new Date()
+): Date | null {
+  const delayMs = webhookRetryDelayMs(retriesCompleted);
+  return delayMs === null ? null : new Date(from.getTime() + delayMs);
+}
+
+/** Delivery status to persist after a failed attempt. */
+export function deliveryStatusAfterFailure(
+  retriesCompleted: number
+): DeliveryStatus {
+  return webhookRetryDelayMs(retriesCompleted) === null
+    ? ("DEAD_LETTER" as DeliveryStatus)
+    : ("RETRYING" as DeliveryStatus);
+}
+
+
 /**
  * Largest raw request body the verifier will parse (1 MiB).
  *

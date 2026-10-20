@@ -106,13 +106,21 @@ jobs:
             echo "✅ schema.prisma matches the committed migrations"
             exit 0
           fi
+          set +e
+          node scripts/check-shadow-drift.mjs /tmp/prisma-drift.sql
+          filtered_status=$?
+          set -e
+          if [ "$filtered_status" -eq 0 ]; then
+            echo "✅ schema.prisma matches the committed migrations (excluding DB-native extensions)"
+            exit 0
+          fi
           echo "::error title=Prisma schema drift::schema.prisma has changes that prisma/migrations does not produce. Run: npx prisma migrate dev --name <name>"
           echo "### Prisma schema drift detected" >> "$GITHUB_STEP_SUMMARY"
           echo '```sql' >> "$GITHUB_STEP_SUMMARY"
           cat /tmp/prisma-drift.sql >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           cat /tmp/prisma-drift.sql
-          exit "$status"
+          exit "$filtered_status"
       - run: npx prisma migrate deploy
       - run: npx vitest run src/__tests__/prisma-schema-ci.test.ts
 

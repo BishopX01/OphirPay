@@ -35,7 +35,7 @@ const MIGRATIONS_DIR = path.join(ROOT, "prisma", "migrations");
 
 /** Strip `//` comments and collapse whitespace from a schema line. */
 function cleanLine(raw) {
-  return raw.replace(/\/\/.*$/, "").trim();
+  return raw.replace(/\r/g, "").replace(/\/\/.*$/, "").trim();
 }
 
 /** Parse schema.prisma into { models, enums }. */
@@ -260,7 +260,9 @@ function splitByCommaTopLevel(body) {
 /** Normalize a SQL type to a comparable token. */
 function normType(sqlType) {
   if (!sqlType) return "";
-  const t = sqlType.trim().toUpperCase().replace(/\s+/g, " ");
+  let t = sqlType.trim().toUpperCase().replace(/\s+/g, " ");
+  const uns = t.match(/^UNSUPPORTED\("?([^"\)]+)"?\)$/);
+  if (uns) t = uns[1].toUpperCase();
   if (t.startsWith("VARCHAR")) return "TEXT";
   if (t.startsWith("TIMESTAMP")) return "TIMESTAMP(3)";
   if (t.startsWith("DOUBLE")) return "DOUBLE PRECISION";

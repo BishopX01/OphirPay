@@ -26,6 +26,13 @@ import {
   API_KEY_LOOKUP_PATTERN,
 } from "@/lib/api-key-format";
 import { hasSessionCookie, verifyCsrfForRequest } from "@/lib/csrf-token";
+import { applySecurityHeaders } from "@/lib/security-headers";
+import {
+  getRateLimitHeaders,
+  getRateLimitExceededHeaders,
+  rateLimitInfoFromResult,
+  getRetryAfterHeaderValue,
+} from "@/lib/rate-limit-headers";
 
 const RATE_LIMIT_MAX = getRateLimitMax();
 
@@ -167,6 +174,7 @@ export async function proxy(request: NextRequest) {
             },
           }
         );
+        const retryAfter = getRetryAfterHeaderValue(info);
         rateLimited.headers.set("Retry-After", String(retryAfter));
         rateLimited.headers.set("X-Request-Id", requestId);
         applySecurityHeaders(rateLimited.headers);

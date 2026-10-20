@@ -11,6 +11,8 @@ import {
   validationError,
   handleApiError,
 } from "@/lib/api-response";
+import { hasScope, missingScopes, type ApiScope } from "@/lib/api-auth";
+import { formatProblemDetails } from "@/lib/api-errors";
 import { verifyCsrf } from "@/lib/csrf";
 import { withMetrics } from "@/lib/metrics-middleware";
 import { withRequestLogging } from "@/lib/request-logging";

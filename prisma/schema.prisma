@@ -196,6 +196,8 @@ model Payment {
   metadata          String?   // JSON string for flexible metadata
   /// Human-readable error message when the payment failed.
   errorMessage      String?
+  /// Full-text search vector generated from description and memo.
+  searchVector      Unsupported("tsvector")?
 
   // Idempotency: a per-attempt key so retries (issue #159) are never
   // mistaken for the original attempt. Regenerated on every retry.
@@ -663,6 +665,8 @@ model AuditLog {
   details   Json?
   /// Client IP that performed the action, when known.
   ip        String?
+  /// Full-text search vector generated from action and details.
+  searchVector Unsupported("tsvector")?
   /// When the action was recorded.
   createdAt DateTime @default(now())
 
@@ -759,6 +763,8 @@ model ApiKey {
   @@index([userId])
   /// Speeds up prefix-based identification lookups.
   @@index([prefix])
+  /// Speeds up lookups of revoked keys.
+  @@index([revokedAt])
 }
 
 /// One recorded request made with an API key — used to aggregate usage by
