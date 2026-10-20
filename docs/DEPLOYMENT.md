@@ -477,11 +477,16 @@ pre-flight validation checklist.
 
 ### Deploy with Helm
 
+The chart never renders a Secret out of thin air: either you point it at a
+Secret you manage (`secrets.existingSecret`, recommended) or it renders one
+from `secrets.*` values, refusing to install when `DATABASE_URL` or
+`AUTH_SECRET` is missing.
+
 ```bash
-# Create namespace
 kubectl create namespace ophirpay
 
-# Create secrets
+# Option A (recommended) — the Secret is owned outside the release, so no
+# credential ever lands in a values file or in the Helm release metadata.
 kubectl create secret generic ophirpay-secrets \
   --namespace ophirpay \
   --from-literal=DATABASE_URL="postgresql://..." \
@@ -489,10 +494,10 @@ kubectl create secret generic ophirpay-secrets \
   --from-literal=NEXT_PUBLIC_CONTRACT_ID="<contract-id>" \
   --from-literal=NEXT_PUBLIC_EMITTER_CONTRACT_ID="<emitter-id>"
 
-# Install with Helm
 helm upgrade --install ophirpay ./helm/ophirpay \
   --namespace ophirpay \
-  --set image.tag=latest \
+  --set secrets.existingSecret=ophirpay-secrets \
+  --set image.tag=1.0.0 \
   --set ingress.hosts[0].host=ophirpay.com \
   --set config.NEXT_PUBLIC_STELLAR_NETWORK=PUBLIC \
   --set config.NEXT_PUBLIC_STELLAR_HORIZON_URL=https://horizon.stellar.org \
@@ -501,6 +506,124 @@ helm upgrade --install ophirpay ./helm/ophirpay \
   --set config.NODE_ENV=production \
   --wait
 ```
+
+Option B renders the Secret from values instead. `DATABASE_URL` and
+`AUTH_SECRET` are required in that mode — rendering fails with a message that
+names the missing value instead of starting a pod with an empty environment:
+
+```bash
+helm upgrade --install ophirpay ./helm/ophirpay \
+  --namespace ophirpay \
+  --set image.tag=1.0.0 \
+  --set-file secrets.DATABASE_URL=/path/to/database-url \
+  --set secrets.AUTH_SECRET="$(openssl rand -hex 32)" \
+  --set secrets.NEXT_PUBLIC_CONTRACT_ID="<contract-id>" \
+  --set secrets.NEXT_PUBLIC_EMITTER_CONTRACT_ID="<emitter-id>" \
+  --wait
+```
+
+#### Secret management (issue #1334)
+
+`secrets.existingSecret` names a Secret that already exists in the release
+namespace. When it is set the chart renders **no** Secret object and the
+Deployment reads the named one, which is what makes the following patterns
+first-class instead of unsupported:
+
+- **External Secrets Operator** — sync from AWS Secrets Manager, GCP Secret
+  Manager, Vault, or 1Password and let the operator own the object:
+
+  ```yaml
+  apiVersion: external-secrets.io/v1beta1
+  kind: ExternalSecret
+  metadata:
+    name: ophirpay-secrets
+    namespace: ophirpay
+  spec:
+    refreshInterval: 1h
+    secretStoreRef:
+      name: ophirpay-secret-store
+      kind: SecretStore
+    target:
+      name: ophirpay-secrets
+    data:
+      - secretKey: DATABASE_URL
+        remoteRef: { key: ophirpay/database-url }
+      - secretKey: AUTH_SECRET
+        remoteRef: { key: ophirpay/auth-secret }
+      - secretKey: NEXT_PUBLIC_CONTRACT_ID
+        remoteRef: { key: ophirpay/contract-id }
+      - secretKey: NEXT_PUBLIC_EMITTER_CONTRACT_ID
+        remoteRef: { key: ophirpay/emitter-contract-id }
+  ```
+
+  ```bash
+  helm upgrade --install ophirpay ./helm/ophirpay \
+    --namespace ophirpay \
+    --set secrets.existingSecret=ophirpay-secrets
+  ```
+
+- **Sealed Secrets** — commit an encrypted `SealedSecret`, let the controller
+  decrypt it into the `ophirpay-secrets` Secret `existingSecret` names:
+
+  ```bash
+  kubeseal --format yaml --namespace ophirpay \
+    --name ophirpay-secrets \
+    --from-file=DATABASE_URL --from-file=AUTH_SECRET \
+    > k8s/sealed-ophirpay-secrets.yaml
+  kubectl apply -f k8s/sealed-ophirpay-secrets.yaml
+  ```
+
+  Rotating a value means re-sealing the `SealedSecret`; the controller then
+  updates the Secret. The chart's `checksum/config` annotation only covers
+  values it renders itself, so restart the pods yourself if a rotated secret
+  must be picked up immediately:
+
+  ```bash
+  kubectl -n ophirpay rollout restart deployment \
+    -l app.kubernetes.io/instance=ophirpay
+  ```
+
+Do not commit populated `values.yaml`, and do not use `--set
+secrets.DATABASE_URL=...` in CI logs; prefer `--set-file` or `existingSecret`.
+
+#### Immutable image references (issue #1333)
+
+`image.tag` defaults to an empty string, which makes the chart render
+`Chart.appVersion` (`1.0.0`) instead of the mutable `latest` tag, and
+`image.pullPolicy` defaults to `IfNotPresent`. That guarantees two pods of one
+release run the same build and that `helm rollback` actually restores the
+previous code.
+
+Pin by tag…
+
+```bash
+helm upgrade ophirpay ./helm/ophirpay --set image.tag=1.4.2
+```
+
+…or, stronger, by digest. A digest cannot be re-pushed under the same name, so
+the running build can never change without a new values file:
+
+```bash
+DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' \
+  ghcr.io/ophirpay/ophirpay:1.4.2)
+helm upgrade ophirpay ./helm/ophirpay --set image.digest="${DIGEST#*@}"
+```
+
+`image.digest` must be `sha256:` followed by 64 hex characters; anything else
+fails the render instead of producing an unpullable reference.
+
+#### Rollouts and autoscaling (issues #1331 and #1332)
+
+- The pod template carries a `checksum/config` annotation over the rendered
+  `templates/config.yaml`. Changing any `config.*` or `secrets.*` value produces
+  a new pod template, so `helm upgrade` performs a rolling update (maxSurge 1,
+  maxUnavailable 0) and the containers pick up the new environment. Without it a
+  `helm upgrade` updated the ConfigMap but left the old environment in every
+  running container.
+- While `autoscaling.enabled` is true (the default) the Deployment renders **no**
+  `spec.replicas`: the HorizontalPodAutoscaler owns the replica count, so a
+  `helm upgrade` can no longer reset it to `replicaCount` and drop pods under
+  load. Set `autoscaling.enabled=false` to manage `replicaCount` by hand.
 
 > ⚠️ **`NEXT_PUBLIC_*` values are baked in at build time.** Next.js inlines them
 > into the JavaScript bundles during `next build`, so `config.NEXT_PUBLIC_*`

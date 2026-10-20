@@ -26,7 +26,9 @@ metadata:
   labels:
     app: ophirpay
 spec:
-  replicas: 2
+  # No `replicas` here on purpose: the HorizontalPodAutoscaler below owns the
+  # replica count (issue #1331). Setting `spec.replicas` alongside an HPA makes
+  # every `kubectl apply` reset whatever the autoscaler had scaled to.
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -43,8 +45,13 @@ spec:
       serviceAccountName: ophirpay
       containers:
         - name: ophirpay
-          image: ghcr.io/ophirpay/ophirpay:latest
-          imagePullPolicy: Always
+          # Pinned to the chart's appVersion, matching
+          # helm/ophirpay/values.yaml (image.tag defaults to
+          # Chart.appVersion). Never use `:latest` here: a mutable tag lets two
+          # pods of the same release run different builds and makes rollbacks
+          # meaningless (issue #1333). Bump this tag together with the chart.
+          image: ghcr.io/ophirpay/ophirpay:1.0.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
               name: http

@@ -4,8 +4,16 @@ replicaCount: 2
 
 image:
   repository: ghcr.io/ophirpay/ophirpay
-  tag: latest
-  pullPolicy: Always
+  # Empty by default: the template falls back to Chart.appVersion ("1.0.0").
+  # Never default to `latest` — it is a mutable tag, so pods of one release can
+  # run different builds and `helm rollback` does not restore the old code
+  # (issue #1333). Pin a real tag, or an immutable digest below, in production.
+  tag: ""
+  # Optional immutable pin, e.g. sha256:6f1c... (64 hex chars). When set it
+  # takes precedence over `tag`, and the running image cannot change without a
+  # new digest in values.
+  digest: ""
+  pullPolicy: IfNotPresent
 
 imagePullSecrets: []
 nameOverride: ""
@@ -81,6 +89,10 @@ resources:
     cpu: 1000m
     memory: 512Mi
 
+# When `autoscaling.enabled` is true the Deployment renders NO `spec.replicas`:
+# the HPA owns the replica count, so a helm upgrade cannot reset it back to
+# `replicaCount` and drop pods under load (issue #1331). Set
+# `autoscaling.enabled: false` to manage replicas by hand.
 autoscaling:
   enabled: true
   minReplicas: 2
@@ -144,7 +156,17 @@ config:
 
 # ── Secrets (rendered into a Kubernetes Secret) ────────────────
 # Names must also exist in `.env.example` (same test as `config` above).
+#
+# Two ways to supply credentials:
+#   1. `secrets.existingSecret: <name>` — the chart renders NO Secret and the
+#      Deployment reads `<name>`. Prefer this in production: the Secret is
+#      owned by External Secrets / Sealed Secrets / Vault, so nothing sensitive
+#      ever lands in a values file or in the Helm release metadata (#1334).
+#   2. Leave `existingSecret` empty and set the values below. `DATABASE_URL`
+#      and `AUTH_SECRET` are then required: rendering fails with a message that
+#      names the missing value instead of starting a pod with an empty secret.
 secrets:
+  existingSecret: ""
   DATABASE_URL: ""
   NEXT_PUBLIC_CONTRACT_ID: ""
   NEXT_PUBLIC_EMITTER_CONTRACT_ID: ""

@@ -82,8 +82,21 @@ kubectl create secret generic ophirpay-secrets \
 
 Referenced in:
 - `k8s/deployment.yaml` → `secretRef: ophirpay-secrets`
-- `helm/ophirpay/templates/config.yaml` → `kind: Secret`
-- `helm/ophirpay/templates/deployment.yaml` → `secretRef`
+- `helm/ophirpay/templates/config.yaml` → `kind: Secret` (skipped when
+  `secrets.existingSecret` is set, so the Secret above can be managed outside
+  the release)
+- `helm/ophirpay/templates/deployment.yaml` → `secretRef` via the
+  `ophirpay.secretName` helper (`secrets.existingSecret`, or the chart-rendered
+  `<release>-<chart>-secrets`)
+
+When the Secret is created outside the release, the chart's `checksum/config`
+annotation does not change on rotation, so restart the Deployment after the
+controller has updated it:
+
+```bash
+kubectl -n ophirpay rollout restart deployment \
+  -l app.kubernetes.io/instance=ophirpay
+```
 
 ### 2.3 Docker Compose
 

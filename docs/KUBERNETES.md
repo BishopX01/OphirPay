@@ -14,9 +14,19 @@ adapt storage, ingress, network policy, and secret management to your cluster.
 
 ## Configuration
 
-The chart renders `values.config` into a ConfigMap and `values.secrets` into a
-Secret. The default secret map is intentionally empty, so never deploy the
-defaults unchanged. Supply at least:
+The chart renders `values.config` into a ConfigMap. Secrets come from one of
+two places:
+
+- **`secrets.existingSecret`** (recommended) — the name of a Secret that already
+  exists in the namespace. The chart then renders no Secret object at all and
+the Deployment reads that name, so External Secrets, Sealed Secrets, Vault, or
+  your platform team own the credentials.
+- **`values.secrets`** — the chart renders `<release>-<chart>-secrets`. This
+  mode fails fast: `helm template`/`helm install` abort with a message naming
+  `secrets.DATABASE_URL` or `secrets.AUTH_SECRET` when either is empty, instead
+  of starting a pod with an empty environment.
+
+Either way the pods need at least:
 
 | Secret | Purpose |
 | --- | --- |
@@ -28,6 +38,24 @@ defaults unchanged. Supply at least:
 Add `REDIS_URL` when using a shared rate-limit store and any deployment-specific
 credentials required by the application. Keep secrets in an external secret
 manager or a sealed/encrypted Secret; do not commit populated `values.yaml`.
+
+### Image pinning
+
+`image.tag` defaults to empty, which renders `Chart.appVersion` (`1.0.0`) — the
+chart never deploys the mutable `latest` tag — and `image.pullPolicy` defaults to
+`IfNotPresent`. For a fully immutable pin set `image.digest` to a
+`sha256:<64 hex>` digest; it takes precedence over `image.tag` and an invalid
+digest fails the render. The standalone `k8s/deployment.yaml` is pinned to the
+same version.
+
+### Rollouts and replicas
+
+- The pod template carries a `checksum/config` annotation over the rendered
+  `templates/config.yaml`, so changing any `config.*` or `secrets.*` value rolls
+  the pods on `helm upgrade` (RollingUpdate, maxSurge 1 / maxUnavailable 0).
+- With `autoscaling.enabled: true` (the default) the Deployment renders no
+  `spec.replicas`; the HPA owns the count. Set `autoscaling.enabled: false` to
+  manage `replicaCount` by hand.
 
 ### Build-time public configuration
 
@@ -42,7 +70,19 @@ then deploy that immutable tag. Non-public values such as `DATABASE_URL`,
 Render before applying anything:
 
 ```bash
-helm lint helm/ophirpay
+# Render against the Secret you already own (no secret values needed):
+helm lint helm/ophirpay --set secrets.existingSecret=ophirpay-secrets
+helm template ophirpay helm/ophirpay \
+  --namespace ophirpay \
+  --set secrets.existingSecret=ophirpay-secrets \
+  --set image.tag='1.0.0' \
+  > /tmp/ophirpay-rendered.yaml
+kubectl apply --dry-run=server -f /tmp/ophirpay-rendered.yaml
+```
+
+Rendering without `secrets.existingSecret` requires the chart-managed values:
+
+```bash
 helm template ophirpay helm/ophirpay \
   --namespace ophirpay \
   --set secrets.DATABASE_URL='postgresql://...' \
@@ -50,7 +90,6 @@ helm template ophirpay helm/ophirpay \
   --set secrets.NEXT_PUBLIC_CONTRACT_ID='CC...' \
   --set secrets.NEXT_PUBLIC_EMITTER_CONTRACT_ID='CD...' \
   > /tmp/ophirpay-rendered.yaml
-kubectl apply --dry-run=server -f /tmp/ophirpay-rendered.yaml
 ```
 
 Create the namespace and deploy the chart only after the render is reviewed:
@@ -61,8 +100,7 @@ helm upgrade --install ophirpay helm/ophirpay \
   --namespace ophirpay --create-namespace \
   --set image.repository=ghcr.io/example/ophirpay \
   --set image.tag='2026-09-24' \
-  --set-file secrets.DATABASE_URL=/path/to/database-url \
-  --set secrets.AUTH_SECRET="$(openssl rand -hex 32)" \
+  --set secrets.existingSecret=ophirpay-secrets \
   --wait
 ```
 
@@ -97,7 +135,9 @@ Probes are configured with tuned timings to accommodate Next.js route compilatio
 ## Pre-flight checklist
 
 - [ ] Build and publish an image with the intended `NEXT_PUBLIC_*` values.
-- [ ] Populate secrets through the cluster’s secret-management process.
+- [ ] Populate secrets through the cluster’s secret-management process, and
+      point the release at them with `--set secrets.existingSecret=<name>`.
+- [ ] Pin the build: an explicit `image.tag` or an immutable `image.digest`.
 - [ ] Confirm database migrations and backups are ready.
 - [ ] Run `helm lint` and `helm template`; inspect every rendered Secret,
       ConfigMap, probe, ingress, and NetworkPolicy.

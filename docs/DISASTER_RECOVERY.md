@@ -116,8 +116,10 @@ export BACKUP_BUCKET="ophirpay-backups"
   # Kubernetes (scale to 0 replicas)
   kubectl scale deployment ophirpay --replicas=0 -n ophirpay
 
-  # Or via Helm (set replicaCount to 0 in values):
-  helm upgrade ophirpay ./helm/ophirpay --namespace ophirpay --set replicaCount=0 --wait
+  # Or via Helm. Disable the HPA as well: while autoscaling is enabled the
+  # chart renders no spec.replicas, so replicaCount alone is ignored (#1331).
+  helm upgrade ophirpay ./helm/ophirpay --namespace ophirpay \
+    --set autoscaling.enabled=false --set replicaCount=0 --wait
   ```
 
   > ⚠️ **UNTESTED IN PRODUCTION** — verify the exact deployment name and
@@ -478,9 +480,11 @@ echo "Reconciliation complete at $(date -u). Re-indexed <N> transactions." | tee
   # Kubernetes
   kubectl scale deployment ophirpay --replicas=<desired-count> -n ophirpay
 
-  # Or via Helm
+  # Or via Helm, then hand the replica count back to the HPA
   helm upgrade ophirpay ./helm/ophirpay --namespace ophirpay \
-    --set replicaCount=<desired-count> --wait
+    --set autoscaling.enabled=false --set replicaCount=<desired-count> --wait
+  helm upgrade ophirpay ./helm/ophirpay --namespace ophirpay \
+    --set autoscaling.enabled=true --wait
   ```
 
   See [docs/DEPLOYMENT.md](./DEPLOYMENT.md) for Helm values and replica counts

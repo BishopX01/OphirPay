@@ -7,16 +7,24 @@
   "properties": {
     "replicaCount": {
       "type": "integer",
-      "minimum": 1,
-      "description": "Deployment replica count when autoscaling is disabled."
+      "minimum": 0,
+      "description": "Deployment replica count when autoscaling is disabled. 0 is allowed so maintenance mode can drain the app (see docs/DISASTER_RECOVERY.md)."
     },
     "image": {
       "type": "object",
-      "required": ["repository", "tag", "pullPolicy"],
+      "required": ["repository", "pullPolicy"],
       "additionalProperties": false,
       "properties": {
         "repository": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string", "minLength": 1 },
+        "tag": {
+          "type": "string",
+          "description": "Explicit image tag. Empty (the default) falls back to Chart.appVersion so the chart never deploys the mutable 'latest' tag (issue #1333)."
+        },
+        "digest": {
+          "type": "string",
+          "description": "Optional immutable image digest, 'sha256:' + 64 hex chars. Takes precedence over 'tag' (issue #1333).",
+          "pattern": "^(|sha256:[a-f0-9]{64})$"
+        },
         "pullPolicy": {
           "type": "string",
           "enum": ["Always", "IfNotPresent", "Never"]
@@ -162,6 +170,7 @@
     },
     "secrets": {
       "type": "object",
+      "description": "Secret values rendered into the chart's Secret, or `existingSecret` naming a Secret that already exists. DATABASE_URL and AUTH_SECRET are enforced by the template with required() when existingSecret is empty (issue #1334).",
       "additionalProperties": { "type": "string" }
     },
     "livenessProbe": { "type": "object" },
