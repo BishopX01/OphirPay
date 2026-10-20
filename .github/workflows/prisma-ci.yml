@@ -5,21 +5,27 @@ on:
     paths:
       - "prisma/**"
       - "scripts/validate-prisma-migrations.sh"
+      - "scripts/verify-prisma-drift.mjs"
       - "src/__tests__/prisma-schema-ci.test.ts"
+      - "src/__tests__/prisma-drift-checker.test.ts"
+      - "docs/PRISMA-CI.md"
       - ".github/workflows/prisma-ci.yml"
   push:
     branches: [main]
     paths:
       - "prisma/**"
       - "scripts/validate-prisma-migrations.sh"
+      - "scripts/verify-prisma-drift.mjs"
       - "src/__tests__/prisma-schema-ci.test.ts"
+      - "src/__tests__/prisma-drift-checker.test.ts"
+      - "docs/PRISMA-CI.md"
       - ".github/workflows/prisma-ci.yml"
 
 permissions:
   contents: read
 
 
-# -- Global Concurrency � cancel stale runs on same PR --------
+# -- Global Concurrency � cancel stale runs on same PR --------
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -56,11 +62,35 @@ jobs:
       - run: npx prisma validate
       - run: npx prisma generate
       - run: bash scripts/validate-prisma-migrations.sh
-      - name: Check schema and migration drift
-        run: >-
-          npx prisma migrate diff
-          --from-migrations prisma/migrations
-          --to-schema-datamodel prisma/schema.prisma
-          --shadow-database-url "postgresql://prisma:prisma@localhost:5432/postgres"
+      - name: Static schema ⇄ migration drift check (no database required)
+        # Replays every committed migration.sql and diffs the resulting tables,
+        # columns and enums against schema.prisma. Fails with the exact drifted
+        # model/field names, so a forgotten migration is obvious in the log.
+        run: node scripts/verify-prisma-drift.mjs
+      - name: Database-level drift check (shadow DB)
+        # `prisma migrate diff` exits 0 even when it prints differences unless
+        # --exit-code is passed — without it a drifted PR merged green while the
+        # next `prisma migrate deploy` failed in staging. Exit code 2 means the
+        # schema contains changes that no migration produces.
+        run: |
+          set +e
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "postgresql://prisma:prisma@localhost:5432/postgres" \
+            --exit-code > /tmp/prisma-drift.sql 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "✅ schema.prisma matches the committed migrations"
+            exit 0
+          fi
+          echo "::error title=Prisma schema drift::schema.prisma has changes that prisma/migrations does not produce. Run: npx prisma migrate dev --name <name>"
+          echo "### Prisma schema drift detected" >> "$GITHUB_STEP_SUMMARY"
+          echo '```sql' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/prisma-drift.sql >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/prisma-drift.sql
+          exit "$status"
       - run: npx prisma migrate deploy
-      - run: npx vitest run src/__tests__/prisma-schema-ci.test.ts
+      - run: npx vitest run src/__tests__/prisma-schema-ci.test.ts src/__tests__/prisma-drift-checker.test.ts

@@ -151,34 +151,51 @@ export function replaySql(sql, state) {
       continue;
     }
 
-    m = trimmed.match(
-      /^ALTER TABLE\s+"?(\w+)"?\s+ADD COLUMN\s+"?(\w+)"?\s+"?([A-Za-z]+)(?:\(([^)]*)\))?(\[\])?/i
-    );
+    // An ALTER TABLE statement can carry several comma-separated actions on
+    // one line, across lines, or both (Prisma generates all three shapes).
+    // Parse the action list rather than a single ADD COLUMN, otherwise every
+    // column after the first is invisible to the diff and reported as drift.
+    m = trimmed.match(/^ALTER TABLE\s+"?(\w+)"?\s+([\s\S]+)$/i);
     if (m) {
-      state.tables[m[1]] = state.tables[m[1]] || {};
-      state.tables[m[1]][m[2]] = `${m[3]}${m[4] ? `(${m[4]})` : ""}${m[5] ?? ""}`;
-      continue;
-    }
+      const table = state.tables[m[1]] || (state.tables[m[1]] = {});
+      for (const rawAction of splitByCommaTopLevel(m[2])) {
+        const action = rawAction.trim();
+        if (!action) continue;
 
-    m = trimmed.match(
-      /^ALTER TABLE\s+"?(\w+)"?\s+ALTER COLUMN\s+"?(\w+)"?\s+TYPE\s+"?([A-Za-z]+)(?:\(([^)]*)\))?(\[\])?/i
-    );
-    if (m) {
-      const t = state.tables[m[1]];
-      if (t) t[m[2]] = `${m[3]}${m[4] ? `(${m[4]})` : ""}${m[5] ?? ""}`;
+        // ADD COLUMN [IF NOT EXISTS] "col" TYPE(...)[]
+        const add = action.match(
+          /^ADD COLUMN\s+(?:IF NOT EXISTS\s+)?"?(\w+)"?\s+"?([A-Za-z]+)(?:\(([^)]*)\))?(\[\])?/i
+        );
+        if (add) {
+          table[add[1]] = `${add[2]}${add[3] ? `(${add[3]})` : ""}${add[4] ?? ""}`;
+          continue;
+        }
+
+        // ALTER COLUMN "col" TYPE TYPE(...)[]
+        const alter = action.match(
+          /^ALTER COLUMN\s+"?(\w+)"?\s+TYPE\s+"?([A-Za-z]+)(?:\(([^)]*)\))?(\[\])?/i
+        );
+        if (alter) {
+          table[alter[1]] = `${alter[2]}${alter[3] ? `(${alter[3]})` : ""}${alter[4] ?? ""}`;
+          continue;
+        }
+
+        // DROP COLUMN [IF EXISTS] "col"
+        const drop = action.match(/^DROP COLUMN\s+(?:IF EXISTS\s+)?"?(\w+)"?/i);
+        if (drop) {
+          delete table[drop[1]];
+          continue;
+        }
+
+        // ADD CONSTRAINT / DROP CONSTRAINT / RENAME etc. do not change the
+        // column set and are intentionally ignored.
+      }
       continue;
     }
 
     m = trimmed.match(/^DROP TABLE\s+"?(\w+)"?\s*;?$/i);
     if (m) {
       delete state.tables[m[1]];
-      continue;
-    }
-
-    m = trimmed.match(/^ALTER TABLE\s+"?(\w+)"?\s+DROP COLUMN\s+"?(\w+)"?/i);
-    if (m) {
-      const t = state.tables[m[1]];
-      if (t) delete t[m[2]];
       continue;
     }
 
