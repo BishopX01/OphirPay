@@ -195,9 +195,7 @@ export async function proxy(request: NextRequest) {
     // Security, CORS, and observability headers
     response.headers.set("X-Request-Id", requestId);
     response.headers.set("X-Api-Version", "1.0.0");
-    response.headers.set("X-Content-Type-Options", "nosniff");
-    response.headers.set("X-Frame-Options", "DENY");
-    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    applySecurityHeaders(response.headers);
     for (const [name, value] of Object.entries(rateLimitHeaders)) {
       response.headers.set(name, value);
     }

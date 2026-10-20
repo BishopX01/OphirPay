@@ -4,7 +4,7 @@
   "contracts": {
     "ophirpay": {
       "artifact": "contracts/ophirpay/target/wasm32v1-none/release/ophirpay_contract.wasm",
-      "baselineBytes": 189425,
+      "baselineBytes": 209566,
       "maxBytes": 524288
     },
     "emitter": {
