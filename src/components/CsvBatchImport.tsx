@@ -80,6 +80,12 @@ export function CsvBatchImport({
         setFileErrors(result.fileErrors);
         setFileName(file.name);
         setParseProgress(100);
+      } catch {
+        // An unreadable file used to reject silently, leaving the dropzone
+        // stuck with no explanation of why the import never started.
+        setRows([]);
+        setFileErrors(["Could not read the CSV file. Please check the format and try again."]);
+        setFileName(file.name);
       } finally {
         setIsParsing(false);
       }

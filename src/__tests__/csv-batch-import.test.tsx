@@ -165,6 +165,24 @@ describe("CsvBatchImport", () => {
     ).toBeInTheDocument();
   });
 
+  it("reports a file-level error when the file cannot be read", async () => {
+    setup();
+    const file = csvFile(
+      `address,amount,memo\n${VALID_ADDRESS},100,\n`
+    );
+    vi.spyOn(file, "text").mockRejectedValueOnce(new Error("unreadable"));
+
+    fireEvent.change(screen.getByTestId("csv-file-input") as HTMLInputElement, {
+      target: { files: [file] },
+    });
+
+    expect(
+      await screen.findByText(/could not read the csv file/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("csv-preview-table")).toBeNull();
+    expect(screen.queryByTestId("csv-row-errors")).toBeNull();
+  });
+
   it("flags memos within 28 characters but over the server's 28-byte limit", async () => {
     setup();
     // 15 × "é" is 15 characters but 30 UTF-8 bytes: accepted by a naive
