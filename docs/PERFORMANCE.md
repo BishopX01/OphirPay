@@ -12,6 +12,65 @@ list queries returned unbounded result sets and used offset pagination with a
 full-table `COUNT(*)`. Load tests catch these regressions early, before they
 reach production.
 
+## Client bundle size budget
+
+First-load client JavaScript is budgeted per route in
+[`bundle-budget.json`](../bundle-budget.json). The budget is **gzip-compressed
+first-load JS**, measured from the App Router client-reference manifests that
+`next build` emits.
+
+### What CI does
+
+| Job | Workflow | What it proves |
+|---|---|---|
+| `build` → "JavaScript bundle-size budget" | `ci.yml` | The PR build stays within every committed per-route budget. |
+| `bundle-analysis` → "Bundle Diff" | `ci.yml` | Builds the PR **and the PR's base branch**, then posts a route-by-route table (base KB, PR KB, Δ, Δ %, budget, status) to the job summary. |
+
+The bundle-diff job hard-fails when any route exceeds its committed budget.
+It **warns** when a route grows by more than `BUNDLE_GROWTH_WARN_KB`
+(default **10 KB**) without breaching the budget, so a new dependency is
+visible in review before it becomes a budget bump. New and removed routes are
+listed separately and are not treated as regressions.
+
+### Run it locally
+
+```bash
+# 1. Build and enforce the committed budgets
+npm run build
+npm run bundle:check
+
+# 2. Capture a machine-readable measurement of the current branch
+node scripts/check-bundle-budget.mjs --json=/tmp/head.json
+
+# 3. Measure another branch and diff it against the first
+#    (repeat step 2 in that checkout, then:)
+npm run bundle:diff -- /tmp/base.json /tmp/head.json
+
+# Open-ended analysis with the interactive treemap (webpack-only; writes
+# .next/analyze/*.html)
+npm run analyze
+```
+
+`npm run bundle:check` prints a route table and appends it to
+`$GITHUB_STEP_SUMMARY` in CI. `--json=<path>` writes the same measurements for
+`scripts/bundle-diff.mjs`; `BUNDLE_REPORT_JSON` is the environment-variable
+equivalent.
+
+### Interpreting the report
+
+- **Measured** is the union of the route's entry chunks, shared framework
+  chunks and client-module chunks, gzip-sized. A shared chunk is counted for
+every route that loads it, so totals are first-load cost per route, not a
+  deduplicated site total.
+- **Δ** is `PR − base`. A positive value means the route got heavier; the
+  percentage is relative to the base measurement.
+- **Status**: `✅` within budget, `⚠️ large growth` (review the dependency),
+  `❌ over budget` (hard failure), `🗑️ removed`.
+- `bundle-budget.json` values are the committed baseline plus deliberate
+  headroom. **Never lower a budget to make a red build green** and only raise
+  one with a reviewable reason in the PR. A route with no entry uses
+  `defaultBudgetKb`; add an explicit entry when adopting a new page.
+
 ## Tools
 
 - **[autocannon](https://github.com/mcollina/autocannon)** (devDependency) —
