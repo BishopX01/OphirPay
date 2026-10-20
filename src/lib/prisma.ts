@@ -142,7 +142,15 @@ export async function getPrismaPoolMetrics(): Promise<PrismaPoolMetrics> {
       const busyGauge = gauges.find((g: PrismaMetricGauge) => g.key === "prisma_pool_connections_busy");
       const idleGauge = gauges.find((g: PrismaMetricGauge) => g.key === "prisma_pool_connections_idle");
       const openGauge = gauges.find((g: PrismaMetricGauge) => g.key === "prisma_pool_connections_open");
-      const waitHist = histograms.find((h: PrismaMetricHistogram) => h.key === "prisma_pool_wait_duration_ms");
+      // Prisma 6.x renamed this histogram to
+      // `prisma_client_queries_wait_histogram_ms`. Accept both keys so the
+      // documented `prisma_pool_wait_duration_ms` series keeps reporting live
+      // values whatever client version resolved from the lockfile.
+      const waitHist =
+        histograms.find((h: PrismaMetricHistogram) => h.key === "prisma_pool_wait_duration_ms") ??
+        histograms.find(
+          (h: PrismaMetricHistogram) => h.key === "prisma_client_queries_wait_histogram_ms"
+        );
 
       const waitSum = typeof waitHist?.value?.sum === "number" ? waitHist.value.sum : 0;
       const waitCount = typeof waitHist?.value?.count === "number" ? waitHist.value.count : 0;
@@ -175,22 +183,16 @@ export async function getPrismaPoolMetrics(): Promise<PrismaPoolMetrics> {
 
 /**
  * Format Prisma connection pool metrics in Prometheus exposition format.
- * Returns native $metrics.prometheus() string if available, or formatted fallback.
+ *
+ * The four families rendered here are the published contract in
+ * `docs/DATABASE_PROVIDERS.md` — dashboards and the recommended alert rules
+ * reference them by name. They are therefore rendered from
+ * {@link getPrismaPoolMetrics} instead of forwarding `$metrics.prometheus()`,
+ * whose family names follow the Prisma client version: 6.x renamed the wait
+ * histogram to `prisma_client_queries_wait_histogram_ms`, which would silently
+ * drop the documented series (and every alert built on it) on upgrade.
  */
 export async function getPrismaPrometheusMetrics(): Promise<string> {
-  try {
-    const clientWithMetrics = prisma as unknown as PrismaWithMetrics;
-    const rawMetrics = clientWithMetrics.$metrics;
-    if (typeof rawMetrics?.prometheus === "function") {
-      const output = await rawMetrics.prometheus();
-      if (typeof output === "string" && output.trim().length > 0) {
-        return output.trim();
-      }
-    }
-  } catch {
-    // Fallback when Prometheus exposition fails or DB is offline
-  }
-
   const pool = await getPrismaPoolMetrics();
   return [
     "# HELP prisma_pool_connections_busy Number of currently used database connections in the pool",

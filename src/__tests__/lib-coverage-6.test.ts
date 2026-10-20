@@ -431,8 +431,16 @@ describe('env', () => {
 
   describe('validateEnv', () => {
     it('throws when DATABASE_URL is missing', () => {
-      // DATABASE_URL is not set in test env — validateEnv should throw
-      expect(() => validateEnv()).toThrow();
+      // Don't assume the ambient environment: a dev container may export
+      // DATABASE_URL, which would let the assertion pass for the wrong
+      // reason. Remove it for the call and restore it afterwards.
+      const previous = process.env.DATABASE_URL;
+      delete process.env.DATABASE_URL;
+      try {
+        expect(() => validateEnv()).toThrow();
+      } finally {
+        if (previous !== undefined) process.env.DATABASE_URL = previous;
+      }
     });
   });
 });
