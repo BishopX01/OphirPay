@@ -5,11 +5,8 @@ import {
   RpcCircuitBreaker,
   CIRCUIT_FAILURE_THRESHOLD,
   CIRCUIT_COOLDOWN_MS,
-  rpcCircuitBreaker,
   resetCircuitBreakerForTest,
-  getCircuitBreakerState,
 } from "@/lib/rpc-circuit-breaker";
-import { executeWithCircuitBreaker } from "@/lib/stellar-rpc";
 import { getMetricsSnapshot, resetMetricsForTest } from "@/lib/metrics-counters";
 import { GET } from "@/app/api/health/route";
 

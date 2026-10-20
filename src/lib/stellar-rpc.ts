@@ -3,7 +3,6 @@
 import { rpc } from "@stellar/stellar-sdk";
 import {
   rpcCircuitBreaker,
-  RpcCircuitBreaker,
   getCircuitBreakerState,
   type CircuitBreakerSnapshot,
 } from "@/lib/rpc-circuit-breaker";

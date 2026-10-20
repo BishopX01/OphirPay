@@ -31,7 +31,7 @@ describe("Cron Job Log Pruning (Issue #1420)", () => {
     ];
 
     let findManyCalls = 0;
-    (vi.spyOn(prisma.cronExecutionLog, "findMany") as any).mockImplementation(async (args: any) => {
+    vi.spyOn(prisma.cronExecutionLog, "findMany").mockImplementation((async (args?: { take?: number }) => {
       findManyCalls += 1;
       // First call returns logs, second call returns empty (all pruned)
       if (findManyCalls === 1) {
@@ -42,13 +42,13 @@ describe("Cron Job Log Pruning (Issue #1420)", () => {
         return mockOldLogs.slice(2, 3);
       }
       return [];
-    });
+    }) as unknown as typeof prisma.cronExecutionLog.findMany);
 
     const deletedIds: string[] = [];
-    vi.spyOn(prisma, "$transaction").mockImplementation(async (fn: any) => {
+    vi.spyOn(prisma, "$transaction").mockImplementation((async (fn: (tx: unknown) => Promise<unknown>) => {
       const tx = {
         cronExecutionLog: {
-          deleteMany: async (args: any) => {
+          deleteMany: async (args: { where: { id: { in: string[] } } }) => {
             const inIds = args.where.id.in;
             deletedIds.push(...inIds);
             return { count: inIds.length };
@@ -56,7 +56,7 @@ describe("Cron Job Log Pruning (Issue #1420)", () => {
         },
       };
       return fn(tx);
-    });
+    }) as unknown as typeof prisma.$transaction);
 
     const result = await pruneCronExecutionLogs({
       retentionDays: 90,
