@@ -19,6 +19,17 @@ export function getCurrentRequestId(): string | undefined {
   return requestIdContext.getStore();
 }
 
+// Every logger call made inside a request (including from deep helpers that
+// only import `logger`) picks up the request id from this context. Registering
+// a provider avoids a circular import: the logger never imports
+// `request-logging` (and therefore stays usable from the Edge proxy).
+// Publish the lookup on globalThis rather than importing back into the logger:
+// the logger must stay usable from the Edge proxy (no `node:async_hooks`), and
+// tests commonly replace `@/lib/logger` with a minimal mock.
+(globalThis as typeof globalThis & {
+  __ophirpayRequestIdProvider?: () => string | undefined;
+}).__ophirpayRequestIdProvider = getCurrentRequestId;
+
 /**
  * Loose constraint accepted by every App Router handler shape — zero, one, or
  * two parameters (dynamic routes destructure `{ params }` from the second).

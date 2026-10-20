@@ -47,7 +47,11 @@ export async function proxy(request: NextRequest) {
   if (pathname.startsWith("/api/")) {
     // 1. Strict CORS preflight handling (#1393)
     if (request.method === "OPTIONS") {
-      return handleCorsPreflight(request, { allowCredentials: true });
+      const preflight = handleCorsPreflight(request, { allowCredentials: true });
+      // Every API response — including preflight — carries the correlation id
+      // so browser-side CORS failures can be traced to a server log line.
+      preflight.headers.set("X-Request-Id", requestId);
+      return preflight;
     }
 
     // 2. Edge API key validation (#1397): reject malformed keys before DB lookup
