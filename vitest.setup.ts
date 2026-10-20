@@ -5,6 +5,19 @@ import { resetFeeStatsCache } from "@/lib/fee-stats";
 import { resetPendingWork } from "@/lib/session-lifecycle";
 import { resetSessionRevocation } from "@/lib/session-revocation";
 
+// ── Hermetic backends ──────────────────────────────────────────
+//
+// The unit suite must never depend on — or write to — a service outside the
+// process. A dev container / docker-compose environment commonly exports
+// REDIS_URL, and the read cache, session revocation and rate limiter then use
+// the shared Redis tier. That tier is *not* reset between test files
+// (`resetReadCache()` clears L1 only), so an entry written by one file
+// satisfies a later file's read: the same suite is green on CI — which has no
+// Redis — and fails locally. Unset it so every unit test runs against the
+// in-process backend, exactly as it does on CI; suites that exercise Redis
+// stub the client explicitly.
+delete process.env.REDIS_URL;
+
 // The read cache (#741) is process-global by design — that is what makes it
 // useful in production and a cross-test leak in a test run. Reset it before
 // every test so a cached payload from one case can never satisfy another.
