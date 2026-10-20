@@ -18,6 +18,36 @@ vi.mock("@/lib/api-auth", () => ({
   authenticateRequest: vi.fn(async () => null),
 }));
 
+// The Prisma block appended to the exposition is live process state — pool
+// occupancy and histogram sums depend on the database the suite happens to be
+// pointed at — so pin it. This test is about OphirPay's format and that the
+// block is appended verbatim; `prisma-pool-metrics.test.ts` covers the block's
+// own formatting and values.
+vi.mock("@/lib/prisma", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/prisma")>();
+  const prismaMetrics = [
+    "# HELP prisma_pool_connections_busy Number of currently used database connections in the pool",
+    "# TYPE prisma_pool_connections_busy gauge",
+    "prisma_pool_connections_busy 0",
+    "",
+    "# HELP prisma_pool_connections_idle Number of currently unused database connections in the pool",
+    "# TYPE prisma_pool_connections_idle gauge",
+    "prisma_pool_connections_idle 0",
+    "",
+    "# HELP prisma_pool_connections_open Number of currently open database connections in the pool",
+    "# TYPE prisma_pool_connections_open gauge",
+    "prisma_pool_connections_open 0",
+    "",
+    "# HELP prisma_pool_wait_duration_ms Time taken to acquire a connection in milliseconds",
+    "# TYPE prisma_pool_wait_duration_ms histogram",
+    'prisma_pool_wait_duration_ms_bucket{le="0"} 0',
+    'prisma_pool_wait_duration_ms_bucket{le="+Inf"} 0',
+    "prisma_pool_wait_duration_ms_sum 0",
+    "prisma_pool_wait_duration_ms_count 0",
+  ].join("\n");
+  return { ...actual, getPrismaPrometheusMetrics: async () => prismaMetrics };
+});
+
 const METRICS_TOKEN = "test-metrics-token-0123456789abcdef";
 
 function authenticatedRequest(token = METRICS_TOKEN): Request {
