@@ -10,12 +10,12 @@ name: Contract regression guard
 #
 # Details and the baseline-update procedure: docs/GAS.md
 
+# Contract changes are detected by a `changes` job plus an always-running gate
+# job instead of workflow-level `paths:` filters. A path-filtered workflow never
+# reports a check when it is skipped, so requiring `contract-regression` in
+# branch protection left unrelated PRs on "Expected — waiting for status".
 on:
   pull_request:
-    paths:
-      - 'contracts/**'
-      - 'scripts/check-contract-regressions.mjs'
-      - '.github/workflows/contract-regression.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,13 +23,36 @@ permissions:
   pull-requests: write
 
 
-# -- Global Concurrency � cancel stale runs on same PR --------
+# -- Global Concurrency — cancel stale runs on same PR --------
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect contract changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # workflow_dispatch has no diff to compute: fall back to running the job.
+      contracts: ${{ steps.filter.outputs.contracts || 'true' }}
+    steps:
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            contracts:
+              - 'contracts/**'
+              - 'scripts/check-contract-regressions.mjs'
+              - '.github/workflows/contract-regression.yml'
+
   contract-regression:
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
     runs-on: ubuntu-latest
     # Default 3 %; override per-PR/per-repo with the WASM_SIZE_THRESHOLD_PERCENT
     # repository variable, or by running the script with the env var set.
@@ -91,3 +114,43 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+  # The only required status check for this workflow. It always runs, so a
+  # PR that does not touch contracts gets a green `contract-regression-gate`
+  # instead of a check that never reports. Never mark `contract-regression` or
+  # `changes` as required — they can be skipped.
+  contract-regression-gate:
+    name: contract-regression-gate
+    needs: [changes, contract-regression]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Confirm the contract checks passed or were not needed
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          JOB_RESULT: ${{ needs.contract-regression.result }}
+          CONTRACTS_NEEDED: ${{ needs.changes.outputs.contracts }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Change detection failed (${CHANGES_RESULT}), so the contract checks cannot be certified."
+            exit 1
+          fi
+
+          case "$JOB_RESULT" in
+            success)
+              echo "✅ Contract regression checks passed."
+              ;;
+            skipped)
+              if [ "$CONTRACTS_NEEDED" = "true" ]; then
+                echo "::error::Contract files changed but the contract-regression job was skipped."
+                exit 1
+              fi
+              echo "✅ No contract-related files changed; the contract-regression job was skipped."
+              ;;
+            *)
+              echo "::error::Contract regression checks did not pass (${JOB_RESULT})."
+              exit 1
+              ;;
+          esac

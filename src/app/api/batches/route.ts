@@ -15,6 +15,7 @@ import {
 } from "@/lib/api-response";
 import { withRequestLogging } from "@/lib/request-logging";
 import { getAuthContext } from "@/lib/auth-session";
+import { requireScope } from "@/lib/api-route";
 import { verifyCsrf } from "@/lib/csrf";
 import { incMetric } from "@/lib/metrics-counters";
 import {
@@ -190,6 +191,11 @@ export const POST = withMetrics("POST /api/batches", withRequestLogging(async fu
         "Authentication required. Connect your wallet or provide an API key."
       );
     }
+
+    // Least privilege for delegated API keys. Browser sessions are exempt
+    // (they belong to the account owner); see requireScope().
+    const scopeError = await requireScope(request, "batches:create", auth);
+    if (scopeError) return scopeError;
 
     const body = await request.json();
 

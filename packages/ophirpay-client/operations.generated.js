@@ -382,7 +382,7 @@ export const API_OPERATIONS = [
     "name": "getApiPaymentsExport",
     "method": "GET",
     "path": "/api/payments/export",
-    "summary": "Export payments as CSV",
+    "summary": "Export payments as CSV or JSON",
     "tags": [
       "Payments"
     ],

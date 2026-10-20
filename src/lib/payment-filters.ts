@@ -14,6 +14,12 @@ import { buildFallbackWhere } from "@/lib/full-text-search";
 export interface PaymentFilters {
   status?: string;
   search?: string;
+  /** Inclusive start of the range, as a `YYYY-MM-DD` date (UTC). */
+  dateFrom?: string;
+  /** Inclusive end of the range, as a `YYYY-MM-DD` date (UTC). */
+  dateTo?: string;
+  /** Asset code filter (e.g. `XLM`). */
+  asset?: string;
 }
 
 export function buildPaymentWhere(
@@ -26,6 +32,22 @@ export function buildPaymentWhere(
     // string here. Invalid values surface as a Prisma validation error, the
     // same behavior the list route had before this helper existed.
     where.status = filters.status as PaymentStatus;
+  }
+  if (filters.dateFrom || filters.dateTo) {
+    // The list UI expresses the range as calendar dates. Interpret them in
+    // UTC so the export cannot silently shift rows across a day boundary
+    // depending on the server's timezone.
+    where.createdAt = {
+      ...(filters.dateFrom
+        ? { gte: new Date(`${filters.dateFrom}T00:00:00.000Z`) }
+        : {}),
+      ...(filters.dateTo
+        ? { lte: new Date(`${filters.dateTo}T23:59:59.999Z`) }
+        : {}),
+    };
+  }
+  if (filters.asset) {
+    where.assetCode = filters.asset;
   }
   if (filters.search) {
     // Issue #157 — server-side reconciliation search. The predicates live in

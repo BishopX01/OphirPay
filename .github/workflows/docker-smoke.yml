@@ -11,16 +11,14 @@ name: "🐳 Docker Smoke Test"
 # proves the running container answers GET /api/health with 200. The BuildKit
 # GHA cache keeps it from dominating CI runtime.
 
+# Docker-related changes are detected by a `changes` job plus an
+# always-running gate job instead of a workflow-level `paths:` filter. A
+# path-filtered workflow never reports a check when it is skipped, so a
+# required `docker-smoke` check would leave unrelated PRs pending. The gate
+# always reports and passes when the build was legitimately skipped.
 on:
   pull_request:
     branches: [main, integration/staging]
-    paths:
-      - "Dockerfile"
-      - "package.json"
-      - "package-lock.json"
-      - "next.config.ts"
-      - "docker-compose.yml"
-      - "scripts/check-node.mjs"
 
 permissions:
   contents: read
@@ -30,8 +28,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Docker-related changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: filter
+        with:
+          filters: |
+            docker:
+              - "Dockerfile"
+              - "package.json"
+              - "package-lock.json"
+              - "next.config.ts"
+              - "docker-compose.yml"
+              - "scripts/check-node.mjs"
+              - ".github/workflows/docker-smoke.yml"
+
   docker-smoke:
     name: "🐳 Docker build & smoke test"
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -135,3 +158,43 @@ jobs:
           docker compose -f docker-compose.yml ps app || true
           docker compose -f docker-compose.yml logs app || true
           exit 1
+
+  # The only required status check for this workflow. It always runs, so a
+  # PR that cannot affect the image gets a green `docker-smoke-gate` instead of
+  # a check that never reports. Never mark `docker-smoke` or `changes` as
+  # required — they can be skipped.
+  docker-smoke-gate:
+    name: docker-smoke-gate
+    needs: [changes, docker-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Confirm the Docker smoke test passed or was not needed
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          JOB_RESULT: ${{ needs.docker-smoke.result }}
+          DOCKER_NEEDED: ${{ needs.changes.outputs.docker }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Change detection failed (${CHANGES_RESULT}), so the Docker smoke test cannot be certified."
+            exit 1
+          fi
+
+          case "$JOB_RESULT" in
+            success)
+              echo "✅ Docker build and smoke test passed."
+              ;;
+            skipped)
+              if [ "$DOCKER_NEEDED" = "true" ]; then
+                echo "::error::Docker-related files changed but the docker-smoke job was skipped."
+                exit 1
+              fi
+              echo "✅ No Docker-related files changed; the docker-smoke job was skipped."
+              ;;
+            *)
+              echo "::error::Docker build and smoke test did not pass (${JOB_RESULT})."
+              exit 1
+              ;;
+          esac

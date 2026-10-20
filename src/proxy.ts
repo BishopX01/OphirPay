@@ -25,6 +25,14 @@ import {
   validateKeyFormat,
   API_KEY_LOOKUP_PATTERN,
 } from "@/lib/api-key-format";
+import { hasSessionCookie, verifyCsrfForRequest } from "@/lib/csrf-token";
+import { applySecurityHeaders } from "@/lib/security-headers";
+import {
+  getRateLimitHeaders,
+  getRateLimitExceededHeaders,
+  rateLimitInfoFromResult,
+  getRetryAfterHeaderValue,
+} from "@/lib/rate-limit-headers";
 
 const RATE_LIMIT_MAX = getRateLimitMax();
 
@@ -54,13 +62,50 @@ export async function proxy(request: NextRequest) {
       return preflight;
     }
 
+    // 1b. CSRF defense-in-depth for cookie-authenticated browser sessions.
+    //
+    // Route handlers already call verifyCsrf(), but a single central check
+    // closes the gap for any future mutating route that forgets to. It applies
+    // only when a session cookie is present: login has no session yet, and
+    // API-key/cron callers bypass the double-submit check in
+    // verifyCsrfForRequest(). Reads and preflights are untouched.
+    if (
+      hasSessionCookie(request.headers.get("cookie")) &&
+      !verifyCsrfForRequest(request)
+    ) {
+      logger.request(
+        request.method,
+        pathname,
+        403,
+        performance.now() - startedAt,
+        requestId
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "CSRF_INVALID",
+            message:
+              "Invalid or missing CSRF token. Refresh the page and try again.",
+          },
+        },
+        {
+          status: 403,
+          headers: {
+            "X-Request-Id": requestId,
+            "Cache-Control": "no-store",
+          },
+        }
+      );
+    }
+
     // 2. Edge API key validation (#1397): reject malformed keys before DB lookup
     const rawApiKey = extractApiKey(request);
     if (rawApiKey && pathname !== "/api/metrics") {
       const keyValidation = validateKeyFormat(rawApiKey);
       const isLegacy = API_KEY_LOOKUP_PATTERN.test(rawApiKey);
       if (!keyValidation.valid && !isLegacy) {
-        return NextResponse.json(
+        const unauthorized = NextResponse.json(
           {
             success: false,
             error: {
@@ -68,13 +113,11 @@ export async function proxy(request: NextRequest) {
               message: "Invalid API key format",
             },
           },
-          {
-            status: 401,
-            headers: {
-              "X-Request-Id": requestId,
-            },
-          }
+          { status: 401 }
         );
+        unauthorized.headers.set("X-Request-Id", requestId);
+        applySecurityHeaders(unauthorized.headers);
+        return unauthorized;
       }
     }
 
@@ -88,8 +131,13 @@ export async function proxy(request: NextRequest) {
       pathname.startsWith("/api/health/") ||
       pathname === "/api/metrics";
 
-    let remaining = RATE_LIMIT_MAX;
-    let resetAt = Date.now() + RATE_LIMIT_WINDOW_MS;
+    // Defaults for exempt endpoints (health/metrics), which still advertise
+    // the window even though they are never throttled.
+    let rateLimitHeaders = getRateLimitHeaders({
+      limit: RATE_LIMIT_MAX,
+      remaining: RATE_LIMIT_MAX,
+      reset: Math.ceil((Date.now() + RATE_LIMIT_WINDOW_MS) / 1000),
+    });
 
     if (!skipRateLimit) {
       const ip = getClientIp(request.headers);
@@ -98,16 +146,17 @@ export async function proxy(request: NextRequest) {
         RATE_LIMIT_WINDOW_MS,
         RATE_LIMIT_MAX
       );
-      remaining = result.remaining;
-      resetAt = result.resetAt;
+      const info = rateLimitInfoFromResult(result);
+      rateLimitHeaders = result.allowed
+        ? getRateLimitHeaders(info)
+        : getRateLimitExceededHeaders(info);
 
       // Rate limit exceeded
       if (!result.allowed) {
-        const retryAfter = Math.ceil((resetAt - Date.now()) / 1000);
         // Rejected before any route handler runs, so log here (with the same
         // request id returned in the response header below).
         logger.request(request.method, pathname, 429, performance.now() - startedAt, requestId);
-        return NextResponse.json(
+        const rateLimited = NextResponse.json(
           {
             success: false,
             error: {
@@ -117,12 +166,19 @@ export async function proxy(request: NextRequest) {
           },
           {
             status: 429,
+            // Limit / Remaining / Reset / Retry-After — a 429 without these
+            // forces SDKs to guess the backoff window.
             headers: {
-              "Retry-After": String(retryAfter),
+              ...rateLimitHeaders,
               "X-Request-Id": requestId,
             },
           }
         );
+        const retryAfter = getRetryAfterHeaderValue(info);
+        rateLimited.headers.set("Retry-After", String(retryAfter));
+        rateLimited.headers.set("X-Request-Id", requestId);
+        applySecurityHeaders(rateLimited.headers);
+        return rateLimited;
       }
     }
 
@@ -139,12 +195,10 @@ export async function proxy(request: NextRequest) {
     // Security, CORS, and observability headers
     response.headers.set("X-Request-Id", requestId);
     response.headers.set("X-Api-Version", "1.0.0");
-    response.headers.set("X-Content-Type-Options", "nosniff");
-    response.headers.set("X-Frame-Options", "DENY");
-    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
-    response.headers.set("X-RateLimit-Limit", String(RATE_LIMIT_MAX));
-    response.headers.set("X-RateLimit-Remaining", String(remaining));
-    response.headers.set("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
+    applySecurityHeaders(response.headers);
+    for (const [name, value] of Object.entries(rateLimitHeaders)) {
+      response.headers.set(name, value);
+    }
 
     // Strict CORS resolution (#1393)
     const origin = request.headers.get("origin");
@@ -154,7 +208,7 @@ export async function proxy(request: NextRequest) {
 
       // For mutation endpoints, reject disallowed cross-origin requests
       if (!resolution.allowed && ["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
-        return NextResponse.json(
+        const forbidden = NextResponse.json(
           {
             success: false,
             error: {
@@ -162,13 +216,11 @@ export async function proxy(request: NextRequest) {
               message: "Cross-origin request blocked: origin not allowed",
             },
           },
-          {
-            status: 403,
-            headers: {
-              "X-Request-Id": requestId,
-            },
-          }
+          { status: 403 }
         );
+        forbidden.headers.set("X-Request-Id", requestId);
+        applySecurityHeaders(forbidden.headers);
+        return forbidden;
       }
 
       if (resolution.allowed && resolution.originHeader) {
@@ -204,9 +256,7 @@ export async function proxy(request: NextRequest) {
   response.headers.set("Content-Security-Policy", csp);
   response.headers.set("X-Request-Id", requestId);
   response.headers.set("X-Api-Version", "1.0.0");
-  response.headers.set("X-Content-Type-Options", "nosniff");
-  response.headers.set("X-Frame-Options", "DENY");
-  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  applySecurityHeaders(response.headers);
 
   // Reporting API (issue #698) — tells the browser where to POST violation
   // reports.  `Report-To` is the older format (Chrome 70+ / Edge 79+);

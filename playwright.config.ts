@@ -1,11 +1,18 @@
 import { defineConfig, devices } from "@playwright/test";
 
+/**
+ * Offline mode (`npm run test:e2e:offline`) runs only `@offline`-tagged specs
+ * whose network boundaries are mocked. It never needs a running app or an
+ * external Stellar endpoint, so a single browser project is enough.
+ */
+const OFFLINE = process.env.E2E_OFFLINE === "1";
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  retries: OFFLINE ? 0 : process.env.CI ? 1 : 0,
+  workers: OFFLINE ? 1 : process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? "blob" : [["html", { open: "never" }], ["list"]],
   use: {
     baseURL: process.env.E2E_BASE_URL || "http://localhost:3000",
@@ -17,7 +24,14 @@ export default defineConfig({
     // the request. Block it for E2E so network interception is deterministic.
     serviceWorkers: "block",
   },
-  projects: [
+  projects: OFFLINE
+    ? [
+        {
+          name: "offline-chromium",
+          use: { ...devices["Desktop Chrome"] },
+        },
+      ]
+    : [
     {
       name: "chromium",
       testIgnore: /.*service-worker\.spec\.ts/,

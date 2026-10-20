@@ -118,6 +118,18 @@ const DEFAULT_PAGE_SIZE = 25;
 /** Max height of the virtualized scroll viewport (issue #745). */
 const VIRTUAL_TABLE_MAX_HEIGHT = 600;
 
+/** Trigger a browser download for an in-memory blob. */
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 // Fetch the complete on-chain dataset rather than a recent slice. Sorting and
 // pagination run client-side, so operating on a partial slice would silently
 // exclude older records — a sorted view could report the wrong minimum amount
@@ -388,44 +400,79 @@ function PaymentsClient() {
     );
   };
 
-  const handleExport = async () => {
+  const handleExport = async (format: "csv" | "json") => {
     // Prefer the server-side export (GET /api/payments/export): it applies the
-    // CURRENT search filter to the full DB-backed record set, so the CSV is
-    // not limited to the rows loaded into the page. It falls back to a
-    // client-side export of the loaded rows when there is no server session
-    // (e.g. wallet connected but the session cookie expired) so the button
-    // never dead-ends in a 401.
-    const params = new URLSearchParams();
+    // CURRENT filters to the full DB-backed record set, so the file is not
+    // limited to the rows loaded into the page. It falls back to a
+    // client-side export of the loaded (already filtered) rows when there is
+    // no server session (e.g. wallet connected but the session cookie expired)
+    // so the button never dead-ends in a 401.
+    const params = new URLSearchParams({ format });
     if (debouncedSearch) params.set("search", debouncedSearch);
+    if (statusFilter) params.set("status", statusFilter);
+    if (dateFrom) params.set("dateFrom", dateFrom);
+    if (dateTo) params.set("dateTo", dateTo);
+    if (assetFilter) params.set("asset", assetFilter);
+
+    const fallbackFilename = `ophirpay-payments-${new Date().toISOString().split("T")[0]}.${format}`;
 
     try {
       const res = await fetch(`/api/payments/export?${params.toString()}`, {
         credentials: "same-origin",
       });
       if (res.ok) {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `ophirpay-payments-${new Date().toISOString().split("T")[0]}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
+        const disposition = res.headers.get("content-disposition") ?? "";
+        const serverFilename =
+          /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackFilename;
+        triggerDownload(await res.blob(), serverFilename);
         return;
       }
     } catch {
       // Network failure or missing session — fall through to the client-side
       // export below.
     }
-    exportToCsv(filtered, [
-      { key: "id", header: "Payment ID" },
-      { key: "payer", header: "Payer" },
-      { key: "payee", header: "Payee" },
-      { key: "amountStroops", header: "Amount (Stroops)" },
-      { key: "metadata", header: "Metadata" },
-      { key: "txHash", header: "Tx Hash" },
-    ], { filename: `ophirpay-payments-${new Date().toISOString().split("T")[0]}.csv` });
+
+    const rows = filtered.map((payment) => ({
+      timestamp: payment.timestamp
+        ? new Date(payment.timestamp * 1000).toISOString()
+        : "",
+      transactionHash: payment.txHash,
+      sender: payment.payer,
+      recipient: payment.payee,
+      asset: payment.assetCode ?? "XLM",
+      amount: (payment.amountStroops / XLM_STROOPS).toFixed(7),
+      fee: "",
+      memo: payment.metadata ?? "",
+      status: getStatus(payment),
+      id: String(payment.id),
+    }));
+
+    if (format === "json") {
+      triggerDownload(
+        new Blob([`${JSON.stringify(rows, null, 2)}\n`], {
+          type: "application/json;charset=utf-8",
+        }),
+        fallbackFilename
+      );
+      return;
+    }
+
+    exportToCsv(
+      rows,
+      [
+        { key: "timestamp", header: "Timestamp" },
+        { key: "transactionHash", header: "Transaction Hash" },
+        { key: "sender", header: "Sender" },
+        { key: "recipient", header: "Recipient" },
+        { key: "asset", header: "Asset" },
+        { key: "amount", header: "Amount" },
+        { key: "fee", header: "Fee" },
+        { key: "memo", header: "Memo" },
+        { key: "status", header: "Status" },
+        { key: "id", header: "Payment ID" },
+      ],
+      { filename: fallbackFilename }
+    );
   };
 
   return (
@@ -450,28 +497,39 @@ function PaymentsClient() {
             isUnavailable={isPriceUnavailable}
             isStale={isPriceStale}
           />
-          <button
-            type="button"
-            onClick={handleExport}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-            title="Export CSV"
+          <div
+            role="group"
+            aria-label="Export payments"
+            className="inline-flex overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={1.5}
-              stroke="currentColor"
-              className="w-4 h-4"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
-            </svg>
-            CSV
-          </button>
+            {(["csv", "json"] as const).map((format) => (
+              <button
+                key={format}
+                type="button"
+                onClick={() => void handleExport(format)}
+                className="inline-flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors border-l border-gray-200 first:border-l-0 dark:border-gray-700"
+                title={`Export ${format.toUpperCase()}`}
+                aria-label={`Export ${format.toUpperCase()}`}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={1.5}
+                  stroke="currentColor"
+                  className="w-4 h-4"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                  />
+                </svg>
+                {format.toUpperCase()}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={() => load()}

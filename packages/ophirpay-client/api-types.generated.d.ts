@@ -290,7 +290,7 @@ export interface ApiRequestBodies {
     };
   patchApiKeys: {
       id: string;
-      scopes: Array<"read:payments" | "write:payments" | "read:analytics" | "admin">;
+      scopes: Array<"read:payments" | "write:payments" | "payments:write" | "batches:create" | "escrow:write" | "escrow:release" | "webhooks:write" | "read:analytics" | "admin">;
     };
   patchApiPaymentsId: {
       status?: "CREATED" | "PENDING" | "COMPLETED" | "FAILED" | "CANCELLED";
@@ -362,7 +362,7 @@ export interface ApiRequestBodies {
     };
   postApiKeys: {
       name: string;
-      scopes?: Array<"read:payments" | "write:payments" | "read:analytics" | "admin">;
+      scopes?: Array<"read:payments" | "write:payments" | "payments:write" | "batches:create" | "escrow:write" | "escrow:release" | "webhooks:write" | "read:analytics" | "admin">;
     };
   postApiKeysIdRotate: undefined;
   postApiMultisig: {
@@ -661,9 +661,10 @@ export interface ApiResponseBodies {
     "401": ProblemDetails;
   };
   getApiPaymentsExport: {
-    "200": string;
+    "200": Array<Record<string, string>>;
     "400": ProblemDetails;
     "401": ProblemDetails;
+    "429": ProblemDetails;
   };
   getApiPaymentsId: {
     "200": PaymentEnvelopeResponse;
@@ -1233,6 +1234,10 @@ export interface ApiQueryParams {
   getApiPaymentsExport: {
     status?: string;
     search?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    asset?: string;
+    format?: "csv" | "json";
   };
   getApiPaymentsId: Record<string, never>;
   getApiPolicyVersions: Record<string, never>;

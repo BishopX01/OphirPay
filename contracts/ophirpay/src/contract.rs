@@ -9,7 +9,10 @@ use crate::types::*;
 use crate::errors::*;
 use crate::events::*;
 use crate::helpers::*;
-use crate::spending_limit::is_spending_limit_expired;
+use crate::spending_limit::{
+    check_and_update_spending_limit, is_spending_limit_expired, remaining_daily_capacity,
+    remaining_monthly_capacity,
+};
 // ── Contract Version ───────────────────────────────────────────
 pub const CONTRACT_VERSION: u32 = 2;
 
@@ -1406,29 +1409,18 @@ impl OphirPayContract {
 
         // Check per-user spending limits
         if let Some(limit) = spending_limit {
-            let day_seconds: u64 = 86400;
-            let month_seconds: u64 = 30 * 86400;
-
             // NOTE: this is a read-only check (MEDIUM-1 audit fix). It never
             // mutates storage — the counters are updated by atomic_spend, which
             // is the only authorized write path. Previously any address could
             // call check_spending repeatedly to burn a user's allowance.
-            let daily_spend = if now.saturating_sub(limit.last_reset_day) >= day_seconds {
-                0
-            } else {
-                limit.current_daily_spend
-            };
-            let monthly_spend = if now.saturating_sub(limit.last_reset_month) >= month_seconds {
-                0
-            } else {
-                limit.current_monthly_spend
-            };
-
-            // Check limits
-            if daily_spend.saturating_add(amount) > limit.daily_limit {
+            //
+            // Windows are calendar-aligned (timestamp / 86_400): a recorded
+            // window that precedes the ledger's current day has already reset,
+            // even when the account was inactive for several days.
+            if amount > remaining_daily_capacity(&limit, now) {
                 return SpendCheckResult::Rejected;
             }
-            if monthly_spend.saturating_add(amount) > limit.monthly_limit {
+            if amount > remaining_monthly_capacity(&limit, now) {
                 return SpendCheckResult::Rejected;
             }
         }
@@ -1497,24 +1489,23 @@ impl OphirPayContract {
                 return Err(PaymentError::SpendingLimitExpired);
             }
 
-            let day_seconds: u64 = 86400;
-            let month_seconds: u64 = 30 * 86400;
-            if now.saturating_sub(limit.last_reset_day) >= day_seconds {
-                limit.current_daily_spend = 0;
-                limit.last_reset_day = now;
+            // Calendar-aligned daily/monthly windows plus atomic debit. The
+            // helper resets stale windows before comparing, and leaves the
+            // record untouched when either quota would be exceeded so the
+            // caller can emit an event and revert without a partial write.
+            if let Err(err) = check_and_update_spending_limit(&mut limit, amount, now) {
+                emit_spending_limit_exceeded(
+                    &env,
+                    &SpendingLimitExceeded {
+                        user: payer.clone(),
+                        requested: amount,
+                        available: remaining_daily_capacity(&limit, now),
+                        daily_limit: limit.daily_limit,
+                        timestamp: now,
+                    },
+                );
+                return Err(err);
             }
-            if now.saturating_sub(limit.last_reset_month) >= month_seconds {
-                limit.current_monthly_spend = 0;
-                limit.last_reset_month = now;
-            }
-            if limit.current_daily_spend.saturating_add(amount) > limit.daily_limit {
-                return Err(PaymentError::SpendingLimitExpired);
-            }
-            if limit.current_monthly_spend.saturating_add(amount) > limit.monthly_limit {
-                return Err(PaymentError::SpendingLimitExpired);
-            }
-            limit.current_daily_spend = limit.current_daily_spend.saturating_add(amount);
-            limit.current_monthly_spend = limit.current_monthly_spend.saturating_add(amount);
             env.storage().persistent().set(&key, &limit);
             env.storage().persistent().extend_ttl(&key, BUMP_MIN_TTL, BUMP_MAX_TTL);
         }
@@ -3997,30 +3988,97 @@ impl OphirPayContract {
             return Err(PaymentError::BatchTooLarge);
         }
 
+        // ── Pass 1: validate and total the batch ────────────────
+        //
+        // The total is checked against the remaining daily quota BEFORE any
+        // payment is written. A batch that cannot fit must revert atomically
+        // instead of paying the first N recipients and stranding the rest.
         let mut total_amount: i128 = 0;
-        let mut pay_count: u64 = env.storage().instance().get(&PAYMENT_COUNT).unwrap_or(0);
-        let mut payment_ids: Vec<u64> = Vec::new(&env);
-        let mut actual_recipients: u32 = 0;
+        let mut valid_entries: u32 = 0;
 
-        // Two-pass: collect valid entries, then execute
         for i in 0..len {
             let amount = if i < amounts.len() {
                 amounts.get(i).unwrap_or(0)
             } else {
                 0 // out-of-range → skip
             };
-            let payee = payees.get(i);
 
-            // Skip invalid entries (zero/negative amount or missing payee)
             if amount <= 0 {
                 continue;
             }
-            total_amount = total_amount.checked_add(amount).ok_or(PaymentError::MathOverflow)?;
+            // A positive amount without a payee is malformed, not a skippable
+            // partial failure — reject it before any state changes.
+            payees.get(i).ok_or(PaymentError::InvalidAmount)?;
+            total_amount = total_amount
+                .checked_add(amount)
+                .ok_or(PaymentError::MathOverflow)?;
+            valid_entries += 1;
+        }
+
+        if valid_entries == 0 {
+            return Err(PaymentError::BatchEmpty);
+        }
+
+        let now = env.ledger().timestamp();
+        let limit_key = (SPEND_LIMIT_KEY, creator.clone());
+        if let Some(mut limit) = env
+            .storage()
+            .persistent()
+            .get::<_, SpendingLimit>(&limit_key)
+        {
+            if !limit.is_active {
+                return Err(PaymentError::SpendingLimitExpired);
+            }
+            if is_spending_limit_expired(limit.expires_at, now) {
+                limit.is_active = false;
+                env.storage().persistent().set(&limit_key, &limit);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&limit_key, BUMP_MIN_TTL, BUMP_MAX_TTL);
+                return Err(PaymentError::SpendingLimitExpired);
+            }
+
+            if let Err(err) = check_and_update_spending_limit(&mut limit, total_amount, now) {
+                emit_spending_limit_exceeded(
+                    &env,
+                    &SpendingLimitExceeded {
+                        user: creator.clone(),
+                        requested: total_amount,
+                        available: remaining_daily_capacity(&limit, now),
+                        daily_limit: limit.daily_limit,
+                        timestamp: now,
+                    },
+                );
+                return Err(err);
+            }
+
+            env.storage().persistent().set(&limit_key, &limit);
+            env.storage()
+                .persistent()
+                .extend_ttl(&limit_key, BUMP_MIN_TTL, BUMP_MAX_TTL);
+        }
+
+        // ── Pass 2: record every valid payment ──────────────────
+        let mut pay_count: u64 = env.storage().instance().get(&PAYMENT_COUNT).unwrap_or(0);
+        let mut payment_ids: Vec<u64> = Vec::new(&env);
+        let mut actual_recipients: u32 = 0;
+
+        for i in 0..len {
+            let amount = if i < amounts.len() {
+                amounts.get(i).unwrap_or(0)
+            } else {
+                0 // out-of-range → skip
+            };
+            if amount <= 0 {
+                continue;
+            }
+
+            let payee_addr = payees.get(i).ok_or(PaymentError::InvalidAmount)?;
+
             pay_count += 1;
             actual_recipients += 1;
             payment_ids.push_back(pay_count);
 
-            let payee_addr = payee.clone().ok_or(PaymentError::InvalidAmount)?;
             let payment = Payment {
                 id: pay_count,
                 payer: creator.clone(),
@@ -4028,7 +4086,7 @@ impl OphirPayContract {
                 amount,
                 asset: asset.clone(),
                 tx_hash: tx_hash.clone(),
-                timestamp: env.ledger().timestamp(),
+                timestamp: now,
                 metadata: String::from_str(&env, "batch"),
                 cancelled: false,
             };
@@ -4046,11 +4104,6 @@ impl OphirPayContract {
         let successful = actual_recipients;
         let failed = len - successful;
 
-        // Fail only if zero payments were recorded
-        if successful == 0 {
-            return Err(PaymentError::BatchEmpty);
-        }
-
         env.storage().instance().set(&PAYMENT_COUNT, &pay_count);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
@@ -4064,7 +4117,7 @@ impl OphirPayContract {
             total_recipients: actual_recipients,
             total_amount,
             asset,
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
             tx_hash,
             payment_ids,
         };
@@ -4366,4 +4419,4 @@ impl OphirPayContract {
         }
     }
 }
-
+

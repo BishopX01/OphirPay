@@ -10,8 +10,27 @@ name: "🔔 Prompt Promotion PR"
 # workflow's default `GITHUB_TOKEN` does not trigger further workflow runs, so
 # its CI checks would never run. Opening it as a human/authenticated actor keeps
 # the merge gate honest.
+#
+# SECURITY — why `pull_request_target` is safe here:
+# `pull_request` hands fork PRs a read-only `GITHUB_TOKEN` regardless of the
+# `permissions:` block below, so `gh pr comment` fails with HTTP 403 and the
+# reminder is skipped for almost every merge (most merges into
+# `integration/staging` come from forks). `pull_request_target` runs in the
+# base repository's context and gets a write token, which fixes the comment.
+# That is only acceptable because this job never checks out pull request code
+# and never executes anything derived from it:
+#   - no `actions/checkout` step at all, so fork commits are never fetched or run;
+#   - the PR number and title reach the script only through `env:` variables
+#     (never interpolated into a `run:` in a way that could execute shell);
+#   - the script only calls `gh api` / `gh pr comment` against the base repo.
+# Keep it that way: adding a checkout of `github.event.pull_request.head.sha`
+# or running a PR-supplied script would turn this into a token-leak vector.
+#
+# Note: GitHub only starts `pull_request_target` runs if this workflow file
+# exists on the repository's default branch (`main`), so the switch takes effect
+# there (and for `integration/staging` merges once promoted).
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
   workflow_dispatch:
 
@@ -26,6 +45,8 @@ concurrency:
 jobs:
   prompt:
     name: "🔔 Prompt Promotion PR"
+    # Merged-into-integration/staging only; this guard is independent of the
+    # event type and must stay in place with `pull_request_target`.
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'integration/staging') }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -36,6 +57,9 @@ jobs:
       TARGET_BRANCH: main
     steps:
       - name: Compare integration branch to target and post the prompt
+        # The PR title is attacker-controlled on fork PRs. It is passed through
+        # `env:` and only ever used as a `printf` argument — never `eval`'d and
+        # never interpolated directly into this `run:` block.
         env:
           MERGED_PR: ${{ github.event.pull_request.number }}
           MERGED_TITLE: ${{ github.event.pull_request.title }}

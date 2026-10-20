@@ -11,6 +11,8 @@ import {
   recordRpcFailoverState,
   LATENCY_BUCKET_BOUNDS,
   SSE_DURATION_BUCKET_BOUNDS,
+  RPC_LATENCY_BUCKET_BOUNDS,
+  DB_LATENCY_BUCKET_BOUNDS,
 } from "@/lib/metrics-counters";
 import { getRpcFailoverState } from "@/lib/rpc-failover";
 import { timingSafeEqual } from "@/lib/crypto";

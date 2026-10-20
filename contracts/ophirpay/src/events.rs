@@ -316,4 +316,28 @@ pub fn acquire_reentrancy_lock<'a>(env: &'a Env) -> Result<ReentrancyGuard<'a>, 
     env.storage().instance().set(&REENTRANCY_LOCK, &true);
     Ok(ReentrancyGuard { env })
 }
-
+
+
+
+/// Emitted when a spend (or the total of a batch) would exceed the remaining
+/// daily/monthly spending quota. `available` is the capacity left in the
+/// relevant window before the request was rejected.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpendingLimitExceeded {
+    pub user: Address,
+    pub requested: i128,
+    pub available: i128,
+    pub daily_limit: i128,
+    pub timestamp: u64,
+}
+
+pub fn emit_spending_limit_exceeded(env: &Env, event: &SpendingLimitExceeded) {
+    env.events().publish(
+        (
+            Symbol::new(env, "spending_limit"),
+            Symbol::new(env, "exceeded"),
+        ),
+        event.clone(),
+    );
+}

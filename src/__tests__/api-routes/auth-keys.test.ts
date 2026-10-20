@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createHash } from "node:crypto";
+import { verifyApiKeyHash } from "@/lib/api-auth";
 
 // Mock dependencies
 //
@@ -330,13 +330,14 @@ describe("API Routes: Auth, CSRF & Keys", () => {
       const createArgs = vi.mocked(prisma.apiKey.create).mock.calls[0]![0] as {
         data: { keyHash: string; prefix: string };
       };
-      // Stored digest is version-tagged; the lookup prefix is the raw key's
-      // first 8 characters (a mismatch here breaks every authenticated call).
-      expect(createArgs.data.keyHash).toMatch(/^v1:[a-f0-9]{64}$/);
+      // New keys are stored as a salted Argon2id digest; the lookup prefix is
+      // the raw key's first 8 characters (a mismatch here breaks every
+      // authenticated call).
+      expect(createArgs.data.keyHash).toMatch(/^v2:\$argon2id\$/);
       expect(createArgs.data.prefix).toBe(data.data.key.slice(0, 8));
-      expect(createArgs.data.keyHash).toBe(
-        `v1:${createHash("sha256").update(data.data.key).digest("hex")}`
-      );
+      expect(
+        await verifyApiKeyHash(data.data.key, createArgs.data.keyHash)
+      ).toBe(true);
     });
 
     it("DELETE returns 401 when unauthenticated", async () => {
