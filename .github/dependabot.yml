@@ -19,11 +19,20 @@ version: 2
 # Security updates:
 # Security advisories bypass grouping rules and are opened as individual,
 # high-priority pull requests for rapid triage and patching.
+#
+# Batch mode:
+# While `integration/staging` exists, every entry below sets
+# `target-branch: "integration/staging"`. A Dependabot PR opened against `main`
+# is rejected by `enforce-integration-branch.yml` and can never pass the merge
+# gate, so update PRs must be opened against the integration branch instead.
+# See CONTRIBUTING.md -> "Dependency Updates" for the switch-back procedure
+# once batch mode ends.
 
 updates:
   # ── NPM Ecosystem ─────────────────────────────────────────────
   - package-ecosystem: "npm"
     directory: "/"
+    target-branch: "integration/staging"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -75,6 +84,7 @@ updates:
   # ── Cargo Ecosystem (OphirPay Contract) ────────────────────────
   - package-ecosystem: "cargo"
     directory: "/contracts/ophirpay"
+    target-branch: "integration/staging"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
@@ -103,6 +113,7 @@ updates:
   # ── Cargo Ecosystem (Emitter Contract) ─────────────────────────
   - package-ecosystem: "cargo"
     directory: "/contracts/emitter"
+    target-branch: "integration/staging"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
@@ -131,6 +142,7 @@ updates:
   # ── GitHub Actions Ecosystem ──────────────────────────────────
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "integration/staging"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3
