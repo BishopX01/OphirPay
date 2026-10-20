@@ -164,4 +164,20 @@ describe("CsvBatchImport", () => {
       await screen.findByText(/must have a header row and at least one data row/i)
     ).toBeInTheDocument();
   });
+
+  it("flags memos within 28 characters but over the server's 28-byte limit", async () => {
+    setup();
+    // 15 × "é" is 15 characters but 30 UTF-8 bytes: accepted by a naive
+    // `.length <= 28` check, rejected by the batch API with a whole-batch
+    // error that named no row.
+    await uploadFile(
+      screen.getByTestId("csv-file-input") as HTMLInputElement,
+      csvFile(`address,amount,memo\n${VALID_ADDRESS},100,${"é".repeat(15)}\n`)
+    );
+
+    expect(await screen.findByText(/28 bytes or fewer/i)).toBeInTheDocument();
+    expect(screen.getByTestId("csv-status")).toHaveTextContent(
+      /fix the highlighted fields/i
+    );
+  });
 });
