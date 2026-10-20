@@ -1,4 +1,4 @@
-name: "🛡️ OpenSSF Scorecard"
+name: "🔒 OpenSSF Scorecard"
 
 on:
   branch_protection_rule:
@@ -7,8 +7,7 @@ on:
 
 permissions: read-all
 
-
-# -- Global Concurrency � singleton group for scheduled runs --------
+# -- Global Concurrency - singleton group for scheduled runs --------
 concurrency:
   group: ${{ github.workflow }}
 
