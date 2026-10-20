@@ -43,7 +43,12 @@ interface KeyStatsResponse {
 
 const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   "read:payments": "View payments and payment history",
-  "write:payments": "Create and submit payments",
+  "write:payments": "Create and submit payments (legacy broad scope)",
+  "payments:write": "Create and submit individual payments",
+  "batches:create": "Create batch payment runs",
+  "escrow:write": "Create and fund escrows",
+  "escrow:release": "Release or claim escrow funds",
+  "webhooks:write": "Create, update, and revoke webhooks",
   "read:analytics": "Read analytics and reporting data",
   admin: "Full access to all API capabilities",
 };
