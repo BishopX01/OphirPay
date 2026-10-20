@@ -25,6 +25,7 @@ import {
   validateKeyFormat,
   API_KEY_LOOKUP_PATTERN,
 } from "@/lib/api-key-format";
+import { applySecurityHeaders } from "@/lib/security-headers";
 
 const RATE_LIMIT_MAX = getRateLimitMax();
 
@@ -56,7 +57,7 @@ export async function proxy(request: NextRequest) {
       const keyValidation = validateKeyFormat(rawApiKey);
       const isLegacy = API_KEY_LOOKUP_PATTERN.test(rawApiKey);
       if (!keyValidation.valid && !isLegacy) {
-        return NextResponse.json(
+        const unauthorized = NextResponse.json(
           {
             success: false,
             error: {
@@ -64,13 +65,11 @@ export async function proxy(request: NextRequest) {
               message: "Invalid API key format",
             },
           },
-          {
-            status: 401,
-            headers: {
-              "X-Request-Id": requestId,
-            },
-          }
+          { status: 401 }
         );
+        unauthorized.headers.set("X-Request-Id", requestId);
+        applySecurityHeaders(unauthorized.headers);
+        return unauthorized;
       }
     }
 
@@ -103,7 +102,7 @@ export async function proxy(request: NextRequest) {
         // Rejected before any route handler runs, so log here (with the same
         // request id returned in the response header below).
         logger.request(request.method, pathname, 429, performance.now() - startedAt, requestId);
-        return NextResponse.json(
+        const rateLimited = NextResponse.json(
           {
             success: false,
             error: {
@@ -111,14 +110,12 @@ export async function proxy(request: NextRequest) {
               message: "Too many requests. Please try again later.",
             },
           },
-          {
-            status: 429,
-            headers: {
-              "Retry-After": String(retryAfter),
-              "X-Request-Id": requestId,
-            },
-          }
+          { status: 429 }
         );
+        rateLimited.headers.set("Retry-After", String(retryAfter));
+        rateLimited.headers.set("X-Request-Id", requestId);
+        applySecurityHeaders(rateLimited.headers);
+        return rateLimited;
       }
     }
 
@@ -135,9 +132,9 @@ export async function proxy(request: NextRequest) {
     // Security, CORS, and observability headers
     response.headers.set("X-Request-Id", requestId);
     response.headers.set("X-Api-Version", "1.0.0");
-    response.headers.set("X-Content-Type-Options", "nosniff");
-    response.headers.set("X-Frame-Options", "DENY");
-    response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    // Baseline headers on every API response, including ones produced above
+    // before a route handler ran (401/403/429).
+    applySecurityHeaders(response.headers);
     response.headers.set("X-RateLimit-Limit", String(RATE_LIMIT_MAX));
     response.headers.set("X-RateLimit-Remaining", String(remaining));
     response.headers.set("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
@@ -150,7 +147,7 @@ export async function proxy(request: NextRequest) {
 
       // For mutation endpoints, reject disallowed cross-origin requests
       if (!resolution.allowed && ["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
-        return NextResponse.json(
+        const forbidden = NextResponse.json(
           {
             success: false,
             error: {
@@ -158,13 +155,11 @@ export async function proxy(request: NextRequest) {
               message: "Cross-origin request blocked: origin not allowed",
             },
           },
-          {
-            status: 403,
-            headers: {
-              "X-Request-Id": requestId,
-            },
-          }
+          { status: 403 }
         );
+        forbidden.headers.set("X-Request-Id", requestId);
+        applySecurityHeaders(forbidden.headers);
+        return forbidden;
       }
 
       if (resolution.allowed && resolution.originHeader) {
@@ -200,9 +195,7 @@ export async function proxy(request: NextRequest) {
   response.headers.set("Content-Security-Policy", csp);
   response.headers.set("X-Request-Id", requestId);
   response.headers.set("X-Api-Version", "1.0.0");
-  response.headers.set("X-Content-Type-Options", "nosniff");
-  response.headers.set("X-Frame-Options", "DENY");
-  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  applySecurityHeaders(response.headers);
 
   // Reporting API (issue #698) — tells the browser where to POST violation
   // reports.  `Report-To` is the older format (Chrome 70+ / Edge 79+);

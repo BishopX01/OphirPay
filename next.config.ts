@@ -1,16 +1,16 @@
 import type { NextConfig } from "next";
 import bundleAnalyzer from "@next/bundle-analyzer";
+import { SECURITY_HEADERS } from "./src/lib/security-headers";
 
 // NOTE: the Content-Security-Policy is set per-request in src/proxy.ts with a
 // fresh nonce-based script-src (no 'unsafe-inline', issue #1257). A static CSP
 // cannot express that per-request nonce, so it must NOT live here.
 //
-// NOTE: this file is the single source of truth for static security headers
-// (issue #681). vercel.json used to repeat the same headers over the
-// `/(.*)` rule — with a contradictory `X-XSS-Protection: 1; mode=block` — so
-// the deployed policy depended on which layer applied last. Any header added
-// here must NOT be duplicated in vercel.json; src/__tests__/security-headers.test.ts
-// fails the build if it is.
+// NOTE: `src/lib/security-headers.ts` is the single source of truth for the
+// baseline security header values (issue #681); this file applies them
+// statically and `src/proxy.ts` re-applies them per request. vercel.json must
+// NOT repeat them — src/__tests__/security-headers.test.ts fails the build if
+// it does.
 //
 // X-XSS-Protection is deliberately "0": the legacy IE/old-Chrome filter is
 // deprecated and has itself been abused for cross-site scripting.
@@ -62,13 +62,8 @@ const nextConfig: NextConfig = {
     {
       source: "/(.*)",
       headers: [
-        { key: "X-Content-Type-Options", value: "nosniff" },
-        { key: "X-Frame-Options", value: "DENY" },
-        { key: "X-XSS-Protection", value: "0" },
-        { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-        { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
-        { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
-        { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+        ...Object.entries(SECURITY_HEADERS).map(([key, value]) => ({ key, value })),
+        // Path-dependent and therefore kept out of the shared baseline.
         { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
       ],
     },

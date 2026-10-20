@@ -8,6 +8,7 @@ platform settings outside the repository can add or override response headers.
 
 | Layer | Responsibility | Applies to |
 |---|---|---|
+| `src/lib/security-headers.ts` | Baseline security header values shared by the app layer. | Imported by `next.config.ts` and `src/proxy.ts`. |
 | `next.config.ts` `headers()` | Static security headers and cache policy. This is the shared source for Vercel and self-hosted Next.js deployments. | All paths, with specific API and static-asset overrides. |
 | `src/proxy.ts` | Per-request CSP and CSP reporting on page requests; request, rate-limit, CORS, and a matching subset of security headers on API requests. | Matched page and `/api/*` requests. |
 | `vercel.json` | Next.js build/deployment settings and the `/home` redirect. It currently defines **no security headers**. | Vercel routing/deployment only. |
@@ -40,7 +41,7 @@ those external layers are outside this repository's precedence.
 | `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` | Yes | Static policy | Require HTTPS in browsers after a secure response. Browsers ignore HSTS over ordinary local HTTP. |
 | `Cross-Origin-Opener-Policy: same-origin` | Yes | Static policy | Isolate top-level browsing contexts. |
 | `Cross-Origin-Resource-Policy` | `same-origin` | `cross-origin` | Allow API responses to be read under the API's CORS policy; static API-specific rule overrides the global value. |
-| `Content-Security-Policy` | Per-request policy below | Not set by the proxy | Restrict scripts, styles, connections, frames, objects, and form destinations. |
+| `Content-Security-Policy` | Per-request policy below | Not set by the proxy | Restrict scripts, styles, connections, frames, objects, and form destinations; see [SECURITY.md](SECURITY.md). |
 | `Report-To` / `Reporting-Endpoints` | CSP collector at `/api/csp-report` | Not set by the proxy | Direct supported browsers to the CSP reporting endpoint. |
 
 The static cache rules are also in `next.config.ts`: content-addressed
@@ -62,6 +63,7 @@ frame-src 'self' https://*.freighter.app chrome-extension: moz-extension:
 object-src 'none'
 base-uri 'self'
 form-action 'self'
+frame-ancestors 'none'
 report-to csp-endpoint
 report-uri /api/csp-report
 ```
@@ -70,17 +72,16 @@ The script policy varies by runtime:
 
 | Runtime | `script-src` |
 |---|---|
-| Production | `'self' 'unsafe-inline' 'wasm-unsafe-eval'` |
-| Development/non-production | `'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'` |
+| Production | `'self' 'nonce-<per-request>' 'strict-dynamic' 'wasm-unsafe-eval'` |
+| Development/non-production | `'self' 'nonce-<per-request>' 'strict-dynamic' 'unsafe-eval' 'wasm-unsafe-eval'` |
 
-`'unsafe-inline'` remains in production because this Next.js 16 App Router
-build emits inline hydration and streaming scripts, and the current proxy
-nonce does not reliably reach those rendered scripts. Removing the directive
-breaks production hydration. The nonce path should only replace this exception
-after it is verified end-to-end: inspect the rendered framework scripts for a
-matching nonce and confirm there are no CSP violations or hydration failures.
-Development additionally needs `'unsafe-eval'` for HMR/Fast Refresh. This is a
-documented limitation, not a claim that the policy is nonce-based.
+`'unsafe-inline'` is deliberately absent from `script-src` (issue #1257): the
+proxy mints a fresh nonce per HTML request and puts the CSP on the request
+headers so the App Router renderer can stamp it on framework scripts, while
+`'strict-dynamic'` covers chunks those scripts load. Development additionally
+needs `'unsafe-eval'` for HMR/Fast Refresh. A CSP hash is only appropriate for
+a fixed inline script that cannot accept the nonce; see [SECURITY.md](SECURITY.md)
+for the maintenance workflow and the middleware test that enforces this.
 
 The page CSP reports to `POST /api/csp-report`; the collector validates and
 limits reports before logging them. See `src/proxy.ts` and
