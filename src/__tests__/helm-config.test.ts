@@ -32,6 +32,17 @@ const values = load(
 ) as ChartValues;
 
 /**
+ * `secrets` holds both the environment variables rendered into the Secret and
+ * chart-only options. `existingSecret` (#1334) is the name of a Secret that is
+ * managed outside the release — it is never rendered as an environment
+ * variable, so it must not be checked against `.env.example`.
+ */
+const chartOptionKeys = new Set(["existingSecret"]);
+const secretEnvKeys = Object.keys(values.secrets).filter(
+  (key) => !chartOptionKeys.has(key),
+);
+
+/**
  * Every variable name documented in `.env.example`, including the
  * commented-out optional/mainnet entries (they are still part of the
  * documented surface, e.g. `REDIS_URL`).
@@ -71,19 +82,28 @@ describe("helm/ophirpay config keys (#683)", () => {
     },
   );
 
-  it.each(Object.keys(values.secrets))(
+  it.each(secretEnvKeys)(
     "secret key %s is a documented .env.example variable",
     (key) => {
       expect(documentedEnvVars.has(key)).toBe(true);
     },
   );
 
-  it.each([...Object.keys(values.config), ...Object.keys(values.secrets)])(
+  it.each([...Object.keys(values.config), ...secretEnvKeys])(
     "key %s is a valid environment variable name",
     (key) => {
       expect(key).toMatch(/^[A-Z][A-Z0-9_]*$/);
     },
   );
+
+  it("keeps chart-only options out of the rendered Secret", () => {
+    // #1334: `existingSecret` is a chart option, not an env var. A template that
+    // ranges over `.Values.secrets` unchanged would ship a literal
+    // `existingSecret` variable to the container.
+    const template = readFileSync(join(templatesDir, "config.yaml"), "utf8");
+
+    expect(template).toContain('omit .Values.secrets "existingSecret"');
+  });
 
   it("uses the Stellar variable names the application reads", () => {
     const envSchema = readFileSync(
