@@ -821,3 +821,39 @@ model PaymentSyncRun {
   /// Speeds up "most recent runs" (admin view).
   @@index([createdAt])
 }
+
+// ── Cron Execution Logs ───────────────────────────────────────
+
+/// Ephemeral log of a single scheduled payment cron run (issue #1420).
+/// Records execution stats and is automatically pruned after the 90-day retention window.
+model CronExecutionLog {
+  /// Primary key — CUID generated at insert time.
+  id            String    @id @default(cuid())
+  /// Run identifier generated for the cycle.
+  runId         String    @unique
+  /// Task executed: "all", "webhook-retries", or "cleanup".
+  task          String    @default("all")
+  /// Number of scheduled payments picked.
+  picked        Int       @default(0)
+  /// Number of scheduled payments successfully executed.
+  executed      Int       @default(0)
+  /// Number of scheduled payments failed.
+  failed        Int       @default(0)
+  /// Number of scheduled payments skipped.
+  skipped       Int       @default(0)
+  /// JSON string or text summary of results.
+  details       String?
+  /// Status of the run: "SUCCESS" | "FAILED" | "PARTIAL".
+  status        String    @default("SUCCESS")
+  /// Error message if the entire run threw.
+  errorMessage  String?
+  /// When the cron run started.
+  createdAt     DateTime  @default(now())
+  /// When the cron run completed.
+  completedAt   DateTime?
+
+  /// Speeds up retention pruning and time-range queries ("older than 90 days").
+  @@index([createdAt])
+  /// Speeds up status-filtered queries.
+  @@index([status])
+}

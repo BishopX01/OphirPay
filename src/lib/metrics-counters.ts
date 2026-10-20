@@ -38,7 +38,14 @@ const counters = {
   csp_violation_reports_total: 0,
   /** Gauge: Prisma connection pool queue wait duration in seconds (issue #1412). */
   database_pool_wait_seconds: 0,
+  /** Counter: cumulative cron execution logs pruned older than retention window (issue #1420). */
+  cron_logs_pruned_total: 0,
 };
+
+/** Increment the cron logs pruned counter (issue #1420). */
+export function incCronLogsPruned(count = 1): void {
+  counters.cron_logs_pruned_total += count;
+}
 
 /** Set the Prisma connection pool queue wait time in seconds (issue #1412). */
 export function setDatabasePoolWaitSeconds(seconds: number): void {
