@@ -10,14 +10,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findFirst: vi.fn(),
+  findMany: vi.fn(),
   update: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/prisma", () => ({
   default: {
     apiKey: {
-      findFirst: mocks.findFirst,
+      findFirst: mocks.findMany,
+      findMany: mocks.findMany,
       update: mocks.update,
     },
     apiKeyRequestLog: {
@@ -26,7 +27,8 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
-import { API_SCOPES, hasScope, missingScopes } from "@/lib/api-auth";
+import { API_SCOPES, hasScope, missingScopes, hashApiKeyV1 } from "@/lib/api-auth";
+import { calculateCrc32 } from "@/lib/api-key-format";
 import { requireScope } from "@/lib/api-route";
 import { createSessionToken } from "@/lib/auth-session";
 import { POST as createBatch } from "@/app/api/batches/route";
@@ -34,7 +36,8 @@ import { POST as createEscrow } from "@/app/api/escrows/route";
 import { POST as createWebhook } from "@/app/api/webhooks/route";
 
 // A valid-format key so authentication reaches the mocked lookup.
-const VALID_KEY = `op_test_${"a".repeat(64)}_00000000`;
+const VALID_PAYLOAD = `op_test_${"a".repeat(64)}`;
+const VALID_KEY = `${VALID_PAYLOAD}_${calculateCrc32(VALID_PAYLOAD)}`;
 
 function makeKey(scopes: string[]) {
   return {
@@ -43,6 +46,7 @@ function makeKey(scopes: string[]) {
     name: "delegated-key",
     expiresAt: null,
     scopes,
+    keyHash: hashApiKeyV1(VALID_KEY),
   };
 }
 
@@ -105,7 +109,7 @@ describe("granular API scopes", () => {
 
 describe("requireScope", () => {
   beforeEach(() => {
-    mocks.findFirst.mockReset();
+    mocks.findMany.mockReset();
     mocks.update.mockReset();
     mocks.update.mockResolvedValue(undefined);
   });
@@ -177,8 +181,8 @@ describe("requireScope", () => {
 
 describe("mutating route wiring", () => {
   beforeEach(() => {
-    mocks.findFirst.mockReset();
-    mocks.findFirst.mockResolvedValue(makeKey(["read:payments"]));
+    mocks.findMany.mockReset();
+    mocks.findMany.mockResolvedValue([makeKey(["read:payments"])]);
   });
 
   const cases = [
