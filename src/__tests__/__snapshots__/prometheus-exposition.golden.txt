@@ -43,6 +43,14 @@ ophirpay_csp_reports_dropped_total{reason="rate_limited"} 0
 ophirpay_csp_reports_dropped_total{reason="deduplicated"} 0
 ophirpay_csp_reports_dropped_total{reason="oversized"} 0
 
+# HELP ophirpay_cron_logs_pruned_total Total cron execution logs pruned older than retention window
+# TYPE ophirpay_cron_logs_pruned_total counter
+ophirpay_cron_logs_pruned_total 0
+
+# HELP cron_logs_pruned_total Total cron execution logs pruned older than retention window
+# TYPE cron_logs_pruned_total counter
+cron_logs_pruned_total 0
+
 # HELP ophirpay_endpoint_request_duration_seconds Request latency histogram per endpoint and status class
 # TYPE ophirpay_endpoint_request_duration_seconds histogram
 ophirpay_endpoint_request_duration_seconds_bucket{method="GET",endpoint="/api/payments",status_class="2xx",le="0.005"} 0
@@ -102,6 +110,14 @@ ophirpay_rpc_failover_fallback_duration_seconds 0.000
 # HELP ophirpay_rpc_failover_longest_fallback_duration_seconds Longest fallback episode observed since process start
 # TYPE ophirpay_rpc_failover_longest_fallback_duration_seconds gauge
 ophirpay_rpc_failover_longest_fallback_duration_seconds 0.000
+
+# HELP ophirpay_rpc_circuit_breaker_trips_total Total times the RPC circuit breaker tripped open on provider failure
+# TYPE ophirpay_rpc_circuit_breaker_trips_total counter
+ophirpay_rpc_circuit_breaker_trips_total 0
+
+# HELP rpc_circuit_breaker_trips_total Total times the RPC circuit breaker tripped open on provider failure
+# TYPE rpc_circuit_breaker_trips_total counter
+rpc_circuit_breaker_trips_total 0
 
 # HELP ophirpay_rpc_request_duration_seconds Latency of Soroban RPC calls in seconds
 # TYPE ophirpay_rpc_request_duration_seconds histogram
