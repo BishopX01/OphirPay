@@ -61,6 +61,24 @@ actionable rather than an opaque failure.
 
 ---
 
+## Soroban RPC Circuit Breaker & Provider Outage Fallback
+
+To prevent application thread starvation when an upstream Soroban RPC provider suffers consecutive timeouts or HTTP 500 errors, `src/lib/rpc-circuit-breaker.ts` and `src/lib/stellar-rpc.ts` implement the **Circuit Breaker** pattern (issue #1421):
+
+### State Machine & Failover Policy
+
+- **CLOSED State:** All RPC interactions target the primary node (`SOROBAN_RPC_URL`). If the node responds successfully, the failure counter is reset to 0.
+- **Trip Condition:** Encountering **5 consecutive failures** (HTTP 500s or network timeouts) trips the circuit to **OPEN**.
+- **OPEN State (Fast Fallback):** During the **30-second cooldown**, inbound requests immediately bypass the degraded primary node and fail over to configured secondary RPC URLs (`DEFAULT_SECONDARY_RPCS`). This prevents API worker threads from stalling while waiting for individual request timeouts.
+- **HALF-OPEN State & Health Probes:** Once the 30-second cooldown expires, the circuit enters **HALF-OPEN**. It sends a lightweight probe query (`getLatestLedger`) to test provider recovery:
+  - If the probe succeeds, the circuit transitions back to **CLOSED** and traffic returns to primary.
+  - If the probe fails, the circuit re-trips to **OPEN** for another 30-second cooldown.
+- **Metrics & Telemetry:**
+  - Circuit state and endpoints are exposed via `GET /api/health` under `circuitBreaker`.
+  - Trips are counted in Prometheus metric `rpc_circuit_breaker_trips_total` (and `ophirpay_rpc_circuit_breaker_trips_total`).
+
+---
+
 <div align="center">
 
 **[← Back to the README](../README.md)**

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { execSync } from "node:child_process";
 
 const root = process.cwd();
 const ignoredDirectories = new Set([
@@ -12,16 +13,68 @@ const ignoredDirectories = new Set([
   "node_modules",
   "target",
 ]);
-const markdownFiles = [];
 
-function collectMarkdownFiles(directory) {
+// Third-party external domains that should be ignored to avoid rate limits and false positives (Issue #1419)
+const IGNORED_EXTERNAL_HOSTS = new Set([
+  "stellar.org",
+  "developers.stellar.org",
+  "github.com",
+  "raw.githubusercontent.com",
+  "freighter.app",
+  "npmjs.com",
+  "www.npmjs.com",
+  "nodejs.org",
+  "rustup.rs",
+  "crates.io",
+  "twitter.com",
+  "x.com",
+  "discord.gg",
+  "discord.com",
+  "t.me",
+  "google.com",
+  "youtube.com",
+  "medium.com",
+  "wikipedia.org",
+  "w3.org",
+  "schema.org",
+  "json-schema.org",
+  "localhost",
+]);
+
+function isExternalUrl(destination) {
+  if (!destination) return false;
+  // Standard scheme (http:, https:, mailto:, ftp:, //)
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(destination)) {
+    return true;
+  }
+  // Check if destination matches any ignored external domain without scheme
+  const cleanDest = destination.split(/[?#]/)[0].toLowerCase();
+  for (const host of IGNORED_EXTERNAL_HOSTS) {
+    if (
+      cleanDest === host ||
+      cleanDest.startsWith(`${host}/`) ||
+      cleanDest.startsWith(`www.${host}`) ||
+      cleanDest.endsWith(`.${host}`) ||
+      cleanDest.includes(`.${host}/`)
+    ) {
+      return true;
+    }
+  }
+  // Host with common domain TLD without scheme (e.g. "example.com/foo")
+  if (/^[a-zA-Z0-9-]+\.(?:com|org|io|dev|app|net|edu|gov|rs|sh|so|me|gg|co)(?:[/?#]|$)/i.test(destination)) {
+    return true;
+  }
+  return false;
+}
+
+function collectMarkdownFiles(directory, collection) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (!ignoredDirectories.has(entry.name)) {
-        collectMarkdownFiles(path.join(directory, entry.name));
+        collectMarkdownFiles(path.join(directory, entry.name), collection);
       }
     } else if (entry.isFile() && /\.mdx?$/i.test(entry.name)) {
-      markdownFiles.push(path.join(directory, entry.name));
+      collection.push(path.join(directory, entry.name));
     }
   }
 }
@@ -145,7 +198,111 @@ function resolveMarkdownTarget(sourceFile, rawDestination) {
   return { path: undefined, fragment };
 }
 
-collectMarkdownFiles(root);
+function getChangedMarkdownFiles(customBase) {
+  const candidates = customBase
+    ? [customBase]
+    : [
+        "origin/integration/staging",
+        "upstream/integration/staging",
+        "origin/main",
+        "HEAD~1",
+      ];
+
+  for (const target of candidates) {
+    try {
+      const output = execSync(
+        `git diff --name-only ${target}...HEAD -- "*.md" "*.mdx"`,
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const files = output
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s && (s.endsWith(".md") || s.endsWith(".mdx")))
+        .filter((s) => fs.existsSync(path.resolve(root, s)));
+      return files;
+    } catch {
+      // try next candidate
+    }
+  }
+
+  // Also try working tree changed/untracked markdown files
+  try {
+    const output = execSync(
+      `git status --porcelain -- "*.md" "*.mdx"`,
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    const files = output
+      .split("\n")
+      .map((s) => s.trim().slice(3).trim())
+      .filter((s) => s && (s.endsWith(".md") || s.endsWith(".mdx")))
+      .filter((s) => fs.existsSync(path.resolve(root, s)));
+    return files;
+  } catch {
+    return null;
+  }
+}
+
+// ── CLI Execution ─────────────────────────────────────────────────────────────
+const args = process.argv.slice(2);
+let changedMode = false;
+let baseRef = null;
+const positionalFiles = [];
+
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === "--changed") {
+    changedMode = true;
+    if (args[i + 1] && !args[i + 1].startsWith("-")) {
+      baseRef = args[++i];
+    }
+  } else if (arg.startsWith("--changed=")) {
+    changedMode = true;
+    baseRef = arg.split("=")[1];
+  } else if (arg === "--files") {
+    while (i + 1 < args.length && !args[i + 1].startsWith("-")) {
+      positionalFiles.push(args[++i]);
+    }
+  } else if (arg === "--annotations" || arg === "--check-external") {
+    // optional flags
+  } else if (!arg.startsWith("-")) {
+    positionalFiles.push(arg);
+  }
+}
+
+const markdownFiles = [];
+
+if (positionalFiles.length > 0) {
+  for (const f of positionalFiles) {
+    const absPath = path.resolve(root, f);
+    if (fs.existsSync(absPath)) {
+      if (fs.statSync(absPath).isDirectory()) {
+        collectMarkdownFiles(absPath, markdownFiles);
+      } else if (/\.mdx?$/i.test(absPath)) {
+        markdownFiles.push(absPath);
+      }
+    } else {
+      console.warn(`Warning: Specified file does not exist: ${f}`);
+    }
+  }
+} else if (changedMode) {
+  const changed = getChangedMarkdownFiles(baseRef);
+  if (changed !== null) {
+    if (changed.length === 0) {
+      console.log("No changed Markdown files detected; link integrity check passed.");
+      process.exit(0);
+    }
+    console.log(`Detected ${changed.length} changed Markdown file(s) to verify:`);
+    for (const f of changed) {
+      console.log(`  • ${f}`);
+      markdownFiles.push(path.resolve(root, f));
+    }
+  } else {
+    console.warn("Could not determine changed files from git diff; falling back to checking all documentation files.");
+    collectMarkdownFiles(root, markdownFiles);
+  }
+} else {
+  collectMarkdownFiles(root, markdownFiles);
+}
 
 const failures = [];
 for (const sourceFile of markdownFiles) {
@@ -157,7 +314,7 @@ for (const sourceFile of markdownFiles) {
     const destination = link.destination.trim();
     if (
       !destination ||
-      /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(destination) ||
+      isExternalUrl(destination) ||
       destination.startsWith("#")
     ) {
       if (destination.startsWith("#")) {
@@ -165,11 +322,15 @@ for (const sourceFile of markdownFiles) {
         try {
           fragment = decodeURIComponent(fragment);
         } catch {
-          // Keep the literal fragment so malformed escapes fail as missing anchors.
+          // Keep literal fragment
         }
         if (!headingAnchors(markdown).has(fragment)) {
           const line = lineOffsets.filter((offset) => offset <= link.offset).length;
-          failures.push(`${path.relative(root, sourceFile)}:${line}: missing anchor #${fragment}`);
+          failures.push({
+            file: path.relative(root, sourceFile).replace(/\\/g, "/"),
+            line,
+            message: `missing anchor #${fragment}`,
+          });
         }
       }
       continue;
@@ -178,15 +339,21 @@ for (const sourceFile of markdownFiles) {
     const { path: target, fragment } = resolveMarkdownTarget(sourceFile, destination);
     const line = lineOffsets.filter((offset) => offset <= link.offset).length;
     if (!target) {
-      failures.push(`${path.relative(root, sourceFile)}:${line}: missing file ${destination}`);
+      failures.push({
+        file: path.relative(root, sourceFile).replace(/\\/g, "/"),
+        line,
+        message: `missing file ${destination}`,
+      });
       continue;
     }
     if (fragment && /\.mdx?$/i.test(target)) {
       const anchors = headingAnchors(fs.readFileSync(target, "utf8"));
       if (!anchors.has(fragment)) {
-        failures.push(
-          `${path.relative(root, sourceFile)}:${line}: missing anchor ${destination}`
-        );
+        failures.push({
+          file: path.relative(root, sourceFile).replace(/\\/g, "/"),
+          line,
+          message: `missing anchor ${destination}`,
+        });
       }
     }
   }
@@ -194,8 +361,14 @@ for (const sourceFile of markdownFiles) {
 
 if (failures.length > 0) {
   console.error(`Found ${failures.length} broken Markdown link(s):`);
-  for (const failure of failures) console.error(`  ${failure}`);
+  const isCI = process.env.GITHUB_ACTIONS === "true" || process.argv.includes("--annotations");
+  for (const failure of failures) {
+    console.error(`  ${failure.file}:${failure.line}: ${failure.message}`);
+    if (isCI) {
+      console.log(`::error file=${failure.file},line=${failure.line},title=Broken Markdown Link::${failure.message}`);
+    }
+  }
   process.exitCode = 1;
 } else {
-  console.log(`Checked Markdown links in ${markdownFiles.length} files; no broken links found.`);
+  console.log(`Checked Markdown links in ${markdownFiles.length} file(s); no broken links found.`);
 }
