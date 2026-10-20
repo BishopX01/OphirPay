@@ -11,7 +11,7 @@ import { getAuthContext } from "@/lib/auth-session";
 import {
   deriveKeyPrefix,
   generateApiKey,
-  hashApiKeyV1,
+  hashApiKeyV2,
 } from "@/lib/api-auth";
 import { verifyCsrf } from "@/lib/csrf";
 import { logger } from "@/lib/logger";
@@ -51,6 +51,9 @@ export async function POST(
     const now = new Date();
     const rawKey = generateApiKey();
     const replacementPrefix = deriveKeyPrefix(rawKey);
+    // Argon2id is deliberately slow — compute the digest before opening the
+    // serializable transaction so the lock is held for the DB work only.
+    const keyHash = await hashApiKeyV2(rawKey);
     const graceLimit = new Date(now.getTime() + ROTATION_GRACE_MS);
 
     const rotated = await prisma.$transaction(async (tx) => {
@@ -91,7 +94,7 @@ export async function POST(
       const replacement = await tx.apiKey.create({
         data: {
           name: previous.name,
-          keyHash: hashApiKeyV1(rawKey),
+          keyHash,
           prefix: replacementPrefix,
           userId: auth.userId,
           scopes: previous.scopes,
