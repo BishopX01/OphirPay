@@ -80,6 +80,44 @@
       "targets": [
         { "expr": "rate(ophirpay_batches_processed_total[5m])", "legendFormat": "Batches/min" }
       ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "options": {},
+      "title": "Soroban RPC Latency — p95 by endpoint",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(ophirpay_rpc_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{endpoint}}"
+        },
+        {
+          "expr": "sum by (endpoint, outcome) (rate(ophirpay_rpc_call_duration_seconds_count[5m]))",
+          "legendFormat": "{{endpoint}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "options": {},
+      "title": "Prisma Query Latency — p95 by model",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(ophirpay_prisma_query_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{model}}"
+        },
+        {
+          "expr": "sum by (model, operation) (rate(ophirpay_prisma_query_duration_seconds_count[5m]))",
+          "legendFormat": "{{model}} {{operation}}/s"
+        }
+      ]
     }
   ],
   "refresh": "30s",

@@ -2,6 +2,7 @@
 
 import { rpc } from "@stellar/stellar-sdk";
 import { logger } from "@/lib/logger";
+import { recordRpcCall } from "@/lib/metrics-counters";
 import { getFailoverProbeTimeoutMs, getSorobanTimeoutMs } from "@/lib/timeout";
 
 /**
@@ -215,6 +216,11 @@ function createRpcServer(url: string): rpc.Server {
 async function probeHealth(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), probeTimeoutMs());
+  const startedAt = performance.now();
+
+  const record = (success: boolean) => {
+    recordRpcCall(url, success ? "success" : "failure", (performance.now() - startedAt) / 1000);
+  };
 
   try {
     const res = await fetch(url, {
@@ -225,12 +231,15 @@ async function probeHealth(url: string): Promise<boolean> {
     });
     if (!res.ok) {
       recordProbeFailure(url, `HTTP ${res.status}`);
+      record(false);
       return false;
     }
     recordProbeSuccess(url);
+    record(true);
     return true;
   } catch (err) {
     recordProbeFailure(url, reasonFromError(err));
+    record(false);
     return false;
   } finally {
     clearTimeout(timeout);

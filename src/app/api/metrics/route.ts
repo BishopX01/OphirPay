@@ -6,8 +6,12 @@ import {
   getMetricsSnapshot,
   getEndpointMetrics,
   getRpcMetricsSnapshot,
+  getRpcCallMetrics,
+  getDbQueryMetrics,
   recordRpcFailoverState,
   LATENCY_BUCKET_BOUNDS,
+  RPC_LATENCY_BUCKET_BOUNDS,
+  DB_LATENCY_BUCKET_BOUNDS,
 } from "@/lib/metrics-counters";
 import { getRpcFailoverState } from "@/lib/rpc-failover";
 import { timingSafeEqual } from "@/lib/crypto";
@@ -264,6 +268,50 @@ export async function buildMetrics(): Promise<string> {
     "# TYPE ophirpay_database_pool_wait_seconds gauge",
     `ophirpay_database_pool_wait_seconds ${c.database_pool_wait_seconds}`
   );
+
+  // ── Soroban RPC call histograms (SLO latency by endpoint) ──
+  lines.push(
+    "",
+    "# HELP ophirpay_rpc_call_duration_seconds Soroban RPC call latency by endpoint and outcome",
+    "# TYPE ophirpay_rpc_call_duration_seconds histogram"
+  );
+  for (const metric of getRpcCallMetrics()) {
+    const baseLabels = `endpoint="${escapeLabelValue(
+      metric.endpoint
+    )}",outcome="${metric.outcome}"`;
+    for (let i = 0; i < RPC_LATENCY_BUCKET_BOUNDS.length; i++) {
+      lines.push(
+        `ophirpay_rpc_call_duration_seconds_bucket{${baseLabels},le="${RPC_LATENCY_BUCKET_BOUNDS[i]}"} ${metric.buckets[i]}`
+      );
+    }
+    lines.push(
+      `ophirpay_rpc_call_duration_seconds_bucket{${baseLabels},le="+Inf"} ${metric.buckets[RPC_LATENCY_BUCKET_BOUNDS.length]}`,
+      `ophirpay_rpc_call_duration_seconds_sum{${baseLabels}} ${metric.sum}`,
+      `ophirpay_rpc_call_duration_seconds_count{${baseLabels}} ${metric.count}`
+    );
+  }
+
+  // ── Prisma query histograms (latency by model + operation) ─
+  lines.push(
+    "",
+    "# HELP ophirpay_prisma_query_duration_seconds Prisma query latency by model and operation",
+    "# TYPE ophirpay_prisma_query_duration_seconds histogram"
+  );
+  for (const metric of getDbQueryMetrics()) {
+    const baseLabels = `model="${escapeLabelValue(
+      metric.model
+    )}",operation="${escapeLabelValue(metric.operation)}"`;
+    for (let i = 0; i < DB_LATENCY_BUCKET_BOUNDS.length; i++) {
+      lines.push(
+        `ophirpay_prisma_query_duration_seconds_bucket{${baseLabels},le="${DB_LATENCY_BUCKET_BOUNDS[i]}"} ${metric.buckets[i]}`
+      );
+    }
+    lines.push(
+      `ophirpay_prisma_query_duration_seconds_bucket{${baseLabels},le="+Inf"} ${metric.buckets[DB_LATENCY_BUCKET_BOUNDS.length]}`,
+      `ophirpay_prisma_query_duration_seconds_sum{${baseLabels}} ${metric.sum}`,
+      `ophirpay_prisma_query_duration_seconds_count{${baseLabels}} ${metric.count}`
+    );
+  }
 
   // ── Live gauges: process memory + open SSE connections ──────
   // Sampled on scrape so load tests can assert memory stays bounded and

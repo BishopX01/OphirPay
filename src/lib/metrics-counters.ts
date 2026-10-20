@@ -205,9 +205,126 @@ export function resetMetricsForTest(): void {
   rpcLatencySum = 0;
   rpcLatencyCount = 0;
   rpcLatencyBuckets.fill(0);
+  rpcCallHistograms.clear();
+  dbQueryHistograms.clear();
   for (const reason of ["rate_limited", "deduplicated", "oversized"] as CspReportDropReason[]) {
     cspReportsDropped.set(reason, 0);
   }
+}
+
+// ── Soroban RPC call histograms (SLO latency) ─────────────────
+
+export type RpcCallOutcome = "success" | "failure";
+
+/**
+ * SLO buckets for Soroban RPC calls: 100ms, 500ms, 1s, 3s, 5s, 10s.
+ * A trailing +Inf bucket is implied.
+ */
+export const RPC_LATENCY_BUCKET_BOUNDS = [0.1, 0.5, 1, 3, 5, 10];
+
+interface HistogramState {
+  buckets: number[];
+  sum: number;
+  count: number;
+}
+
+export interface RpcCallMetric extends HistogramState {
+  endpoint: string;
+  outcome: RpcCallOutcome;
+}
+
+const rpcCallHistograms = new Map<string, RpcCallMetric>();
+
+function observeHistogram(
+  state: HistogramState,
+  bounds: readonly number[],
+  durationSeconds: number
+): void {
+  state.sum += durationSeconds;
+  state.count += 1;
+  for (let i = 0; i < bounds.length; i++) {
+    if (durationSeconds <= bounds[i]) state.buckets[i] += 1;
+  }
+  state.buckets[bounds.length] += 1;
+}
+
+/**
+ * Record one Soroban RPC call, labelled by the endpoint used and whether it
+ * succeeded. Emitted by `rpc-failover.ts` and exposed at `/api/metrics`.
+ */
+export function recordRpcCall(
+  endpoint: string,
+  outcome: RpcCallOutcome,
+  durationSeconds: number
+): void {
+  const key = `${endpoint}|${outcome}`;
+  let metric = rpcCallHistograms.get(key);
+  if (!metric) {
+    metric = {
+      endpoint,
+      outcome,
+      buckets: new Array(RPC_LATENCY_BUCKET_BOUNDS.length + 1).fill(0),
+      sum: 0,
+      count: 0,
+    };
+    rpcCallHistograms.set(key, metric);
+  }
+  observeHistogram(metric, RPC_LATENCY_BUCKET_BOUNDS, durationSeconds);
+}
+
+/** Snapshot of per-endpoint Soroban RPC latency histograms. */
+export function getRpcCallMetrics(): RpcCallMetric[] {
+  return [...rpcCallHistograms.values()].sort(
+    (a, b) =>
+      a.endpoint.localeCompare(b.endpoint) || a.outcome.localeCompare(b.outcome)
+  );
+}
+
+// ── Prisma query histograms (per model + operation) ───────────
+
+/** Buckets for database query latency (5ms … 10s), with an implied +Inf. */
+export const DB_LATENCY_BUCKET_BOUNDS = [
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+];
+
+export interface DbQueryMetric extends HistogramState {
+  model: string;
+  operation: string;
+}
+
+const dbQueryHistograms = new Map<string, DbQueryMetric>();
+
+/**
+ * Record a Prisma query observation labelled by model and operation, and keep
+ * the legacy aggregate summary in sync (`observeDbQuery`).
+ */
+export function recordDbQuery(
+  model: string,
+  operation: string,
+  durationSeconds: number
+): void {
+  observeDbQuery(durationSeconds);
+  const key = `${model}|${operation}`;
+  let metric = dbQueryHistograms.get(key);
+  if (!metric) {
+    metric = {
+      model,
+      operation,
+      buckets: new Array(DB_LATENCY_BUCKET_BOUNDS.length + 1).fill(0),
+      sum: 0,
+      count: 0,
+    };
+    dbQueryHistograms.set(key, metric);
+  }
+  observeHistogram(metric, DB_LATENCY_BUCKET_BOUNDS, durationSeconds);
+}
+
+/** Snapshot of per-model/operation Prisma latency histograms. */
+export function getDbQueryMetrics(): DbQueryMetric[] {
+  return [...dbQueryHistograms.values()].sort(
+    (a, b) =>
+      a.model.localeCompare(b.model) || a.operation.localeCompare(b.operation)
+  );
 }
 
 // ── Per-endpoint latency histograms and error counts ──────────
