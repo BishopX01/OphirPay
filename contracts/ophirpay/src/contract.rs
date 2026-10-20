@@ -4011,7 +4011,7 @@ impl OphirPayContract {
             payees.get(i).ok_or(PaymentError::InvalidAmount)?;
             total_amount = total_amount
                 .checked_add(amount)
-                .ok_or(PaymentError::MathOverflow)?;
+                .ok_or(PaymentError::ArithmeticOverflow)?;
             valid_entries += 1;
         }
 
@@ -4226,7 +4226,7 @@ impl OphirPayContract {
                         entry.fee = entry
                             .fee
                             .checked_add(fee)
-                            .ok_or(PaymentError::MathOverflow)?;
+                            .ok_or(PaymentError::ArithmeticOverflow)?;
                         fees.set(index, entry);
                         matched = true;
                         break;
@@ -4247,7 +4247,7 @@ impl OphirPayContract {
                     &fee_key,
                     &cumulative
                         .checked_add(fee)
-                        .ok_or(PaymentError::MathOverflow)?,
+                        .ok_or(PaymentError::ArithmeticOverflow)?,
                 );
             }
 
@@ -4255,7 +4255,7 @@ impl OphirPayContract {
             successful += 1;
             total_amount = total_amount
                 .checked_add(request.amount)
-                .ok_or(PaymentError::MathOverflow)?;
+                .ok_or(PaymentError::ArithmeticOverflow)?;
             payment_ids.push_back(pay_count);
 
             let payment = Payment {

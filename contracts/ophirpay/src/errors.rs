@@ -650,8 +650,8 @@ pub enum PaymentError {
     CannotRevokeSelf = 304,
     /// No pending ownership transfer
     NoPendingOwner = 305,
-    /// Math overflow
-    MathOverflow = 306,
+    /// Arithmetic overflow (checked arithmetic exceeded the i128/u64 range)
+    ArithmeticOverflow = 306,
     // ── Stream Accounting Guards (307) ─────────────────────
     /// Stream accounting invariant violated: refused to pay an inconsistent amount
     StreamInvariantViolated = 307,
