@@ -10,6 +10,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useWallet } from "@/hooks/useMultiWallet";
 import { useApiQuery } from "@/hooks/useApiQuery";
 import { usePageTitle } from "@/hooks/usePageTitle";
+import { useTableKeyboardNavigation } from "@/hooks/useTableKeyboardNavigation";
 import { PAGE_TITLES } from "@/lib/page-titles";
 import {
   createEscrow,
@@ -23,7 +24,7 @@ import {
 import { fetchRecentContractRecords } from "@/lib/on-chain-records";
 import { formatXlmStroops, parseXlmAmount } from "@/lib/stellar-amount";
 import type { EscrowData } from "@/types/contract-abi";
-import { shortenAddress } from "@/lib/utils";
+import { cn, shortenAddress } from "@/lib/utils";
 
 const XLM_ASSET = "native";
 
@@ -38,6 +39,7 @@ export default function EscrowsPage() {
   const [amount, setAmount] = useState("");
   const [deadline, setDeadline] = useState("");
   const [metadata, setMetadata] = useState("");
+  const [selectedEscrow, setSelectedEscrow] = useState<EscrowData | null>(null);
   const { data: contractOwner } = useApiQuery<string>(
     ["contract-owner"],
     undefined,
@@ -57,6 +59,15 @@ export default function EscrowsPage() {
     undefined,
     () => fetchRecentContractRecords<EscrowData>("escrows"),
   );
+
+  const { activeIndex, getRowProps, onRowsKeyDown, tbodyRef } =
+    useTableKeyboardNavigation<HTMLDivElement>(escrows.length, {
+      rowSelector: "[data-row-index]",
+      onActivate: (index) => {
+        const escrow = escrows[index];
+        if (escrow) setSelectedEscrow(escrow);
+      },
+    });
 
   const submit = async (action: () => Promise<{ success: boolean; error?: string }>, success: string) => {
     setSubmitting(true);
@@ -177,8 +188,14 @@ export default function EscrowsPage() {
           </p>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {escrows.map((escrow) => {
+        <div
+          ref={tbodyRef}
+          onKeyDown={onRowsKeyDown}
+          role="list"
+          aria-label="Escrows"
+          className="space-y-3"
+        >
+          {escrows.map((escrow, index) => {
             const id = Number(escrow.id);
             const isSettled = escrow.released || escrow.claimed;
             const isDisputed = Number(escrow.dispute_initiated_at ?? 0) > 0;
@@ -187,7 +204,17 @@ export default function EscrowsPage() {
             const isDepositor = wallet.publicKey === escrow.depositor;
             const isArbiter = Boolean(escrow.arbiter && wallet.publicKey === escrow.arbiter);
             return (
-              <Card key={id} className="space-y-3 p-4">
+              <div
+                key={id}
+                role="listitem"
+                data-row-index={index}
+                {...getRowProps(index)}
+                className={cn(
+                  "rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ophir-500 dark:focus-visible:ring-offset-gray-900",
+                  index === activeIndex && "ring-2 ring-ophir-200 dark:ring-ophir-800"
+                )}
+              >
+              <Card className="space-y-3 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-semibold text-gray-900 dark:text-white">Escrow #{id}</h2>
                   <Badge variant={isSettled ? "success" : isDisputed ? "warning" : "info"}>
@@ -285,10 +312,32 @@ export default function EscrowsPage() {
                   </div>
                 )}
               </Card>
+              </div>
             );
           })}
         </div>
       )}
+
+      <Modal
+        open={selectedEscrow !== null}
+        onClose={() => setSelectedEscrow(null)}
+        title={selectedEscrow ? `Escrow #${selectedEscrow.id}` : "Escrow details"}
+        description="Escrow details"
+      >
+        {selectedEscrow && (
+          <dl className="grid gap-3 text-sm sm:grid-cols-2">
+            <div><dt className="font-medium text-gray-500">Amount</dt><dd className="mt-0.5">{formatXlmStroops(selectedEscrow.amount)}</dd></div>
+            <div><dt className="font-medium text-gray-500">Status</dt><dd className="mt-0.5">{selectedEscrow.released || selectedEscrow.claimed ? "Settled" : "Locked"}</dd></div>
+            <div><dt className="font-medium text-gray-500">Depositor</dt><dd className="mt-0.5 break-all font-mono text-xs">{selectedEscrow.depositor}</dd></div>
+            <div><dt className="font-medium text-gray-500">Beneficiary</dt><dd className="mt-0.5 break-all font-mono text-xs">{selectedEscrow.beneficiary}</dd></div>
+            <div><dt className="font-medium text-gray-500">Arbiter</dt><dd className="mt-0.5 break-all font-mono text-xs">{selectedEscrow.arbiter ?? "Not set"}</dd></div>
+            <div><dt className="font-medium text-gray-500">Claimable after</dt><dd className="mt-0.5">{new Date(Number(selectedEscrow.deadline) * 1000).toLocaleString()}</dd></div>
+            {selectedEscrow.metadata && (
+              <div className="sm:col-span-2"><dt className="font-medium text-gray-500">Memo</dt><dd className="mt-0.5">{selectedEscrow.metadata}</dd></div>
+            )}
+          </dl>
+        )}
+      </Modal>
 
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create escrow" description="Deposit XLM into a contract escrow with an optional arbiter.">
         <div className="space-y-4">

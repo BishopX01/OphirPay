@@ -273,6 +273,43 @@ pub struct Proposal {
     pub deposit_amount: i128,   // amount locked (>= min_proposal_deposit)
 }
 
+/// Typed payload for granting a role through the timelock.
+#[contracttype]
+#[derive(Clone)]
+pub struct RoleGrantAction {
+    pub grantee: Address,
+    pub role: Role,
+}
+
+/// Typed payload for setting a user's spending limit through the timelock.
+#[contracttype]
+#[derive(Clone)]
+pub struct SpendingLimitAction {
+    pub user: Address,
+    pub daily_limit: i128,
+    pub monthly_limit: i128,
+    pub expires_at: u64,
+    pub is_active: bool,
+}
+
+/// Typed, on-chain representation of every timelockable admin operation.
+///
+/// Storing a typed value (rather than the legacy free-form `data` string)
+/// means `execute_timelocked_action` can dispatch the change itself and a
+/// proposer cannot substitute a different action between approval and
+/// execution.
+#[contracttype]
+#[derive(Clone)]
+pub enum TimelockAction {
+    /// Legacy string-only action (no on-chain dispatch).
+    Legacy,
+    FeeConfig(FeeConfig),
+    MultisigConfig(MultisigConfig),
+    GrantRole(RoleGrantAction),
+    GovernanceConfig(GovernanceConfig),
+    SpendingLimit(SpendingLimitAction),
+}
+
 /// A timelocked admin action. Proposed now, executable after `unlocks_at`.
 /// This protects against compromised admin keys by forcing a 24h delay
 /// on sensitive operations.
@@ -287,6 +324,10 @@ pub struct TimelockedAction {
     pub proposed_at: u64,
     pub unlocks_at: u64,
     pub executed: bool,
+    /// Typed payload executed on-chain. `Legacy` for string-only actions
+    /// proposed through the compatibility entrypoint (e.g. "pause"), which
+    /// remain informational and are only marked executed.
+    pub action: TimelockAction,
 }
 
 /// Configurable platform fee structure per operation type.

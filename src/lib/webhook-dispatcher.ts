@@ -8,6 +8,7 @@ import {
   recordWebhookDelivery,
   storeWebhookEvent,
 } from "@/lib/webhook-event-store";
+import { getCurrentRequestId } from "@/lib/request-logging";
 import { isSubscribedToEvent } from "@/lib/webhook-filter";
 
 /**
@@ -38,10 +39,12 @@ export async function dispatchWebhookEvent(
     );
     if (webhooks.length === 0) return;
 
+    const requestId = getCurrentRequestId();
     const payload = {
       event,
       timestamp: new Date().toISOString(),
       data,
+      ...(requestId ? { requestId } : {}),
     };
 
     logger.info("Dispatching webhooks", { event, count: webhooks.length });

@@ -78,6 +78,47 @@ test.describe("Payments table accessibility", () => {
     await expect(trigger).toBeFocused();
   });
 
+  test("Enter opens the detail view for the focused row", async ({ page }) => {
+    await page.goto("/payments");
+    await expect(page.locator("main")).toBeVisible({ timeout: 15000 });
+    await expect(page.locator(TABLE_SELECTOR)).toBeVisible({ timeout: 15000 });
+
+    await waitForTableData(page);
+
+    const rows = page.locator(`${TABLE_SELECTOR} tbody tr[data-row-index]`);
+    test.skip((await rows.count()) === 0, "requires an on-chain payment row");
+
+    await rows.first().focus();
+    await page.keyboard.press("Enter");
+
+    await expect(page).toHaveURL(/\/payments\/\d+/);
+  });
+
+  test("pagination Previous/Next controls are keyboard reachable", async ({
+    page,
+  }) => {
+    await page.goto("/payments");
+    await expect(page.locator("main")).toBeVisible({ timeout: 15000 });
+
+    const pagination = page.getByRole("navigation", { name: "Pagination" });
+    test.skip(
+      (await pagination.count()) === 0,
+      "requires more than one page of payments"
+    );
+
+    const previous = pagination.getByRole("button", { name: "Previous page" });
+    const next = pagination.getByRole("button", { name: "Next page" });
+
+    // Native buttons are in the Tab order (no tabindex=-1) and receive focus.
+    await expect(previous).not.toHaveAttribute("tabindex", "-1");
+    await expect(next).not.toHaveAttribute("tabindex", "-1");
+
+    await previous.focus();
+    await expect(previous).toBeFocused();
+    await next.focus();
+    await expect(next).toBeFocused();
+  });
+
   test("arrow keys navigate between payment rows", async ({ page }) => {
     await page.goto("/payments");
     await expect(page.locator("main")).toBeVisible({ timeout: 15000 });

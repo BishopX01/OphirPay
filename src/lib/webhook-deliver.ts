@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 import { logger } from "@/lib/logger";
+import { getCurrentRequestId } from "@/lib/request-logging";
+import { REQUEST_ID_HEADER } from "@/lib/request-id";
 import { incMetric } from "@/lib/metrics-counters";
 import { isSafeWebhookUrlAtDelivery } from "@/lib/webhook-url-guard";
 import { RETRY_CONFIG } from "@/lib/retry-config";
@@ -17,6 +19,13 @@ export interface WebhookPayload {
   event: string;
   timestamp: string;
   data: Record<string, unknown>;
+  /**
+   * Correlation id of the API request that originated this event. Copied from
+   * the request's async context when available and included in the signed
+   * body plus the `X-Request-Id` delivery header so a subscriber can trace a
+   * webhook back through our logs to the request that caused it.
+   */
+  requestId?: string;
   /** Present and true only for integrator test events — never real payments. */
   test?: boolean;
 }
@@ -231,6 +240,9 @@ export function buildWebhookRequestPreview(
       [WEBHOOK_SIGNATURE_HEADER]: signature,
       "X-OphirPay-Event": payload.event,
       [WEBHOOK_TIMESTAMP_HEADER]: timestamp,
+      ...(payload.requestId
+        ? { [REQUEST_ID_HEADER]: payload.requestId }
+        : {}),
     },
   };
 }
@@ -242,7 +254,15 @@ export async function deliverWebhook(
   maxRetries: number = RETRY_CONFIG.webhook.maxAttempts
 ): Promise<WebhookDeliveryDetails> {
   const startedAt = Date.now();
-  const request = buildWebhookRequestPreview(payload, secret);
+  // Prefer an explicit id (replay/redelivery of a stored event) and fall back
+  // to the request context of the caller. Building the signed payload from
+  // this normalized object means the id is covered by the HMAC and cannot be
+  // altered in transit.
+  const requestId = payload.requestId ?? getCurrentRequestId();
+  const deliveryPayload: WebhookPayload = requestId
+    ? { ...payload, requestId }
+    : payload;
+  const request = buildWebhookRequestPreview(deliveryPayload, secret);
   let lastStatusCode: number | undefined;
   let lastResponseBody = "";
   let lastError: string | undefined;
@@ -291,7 +311,7 @@ export async function deliverWebhook(
       lastStatusCode = response.status;
 
       if (response.ok) {
-        logger.info("Webhook delivered", { url, event: payload.event, attempt });
+        logger.info("Webhook delivered", { url, event: payload.event, attempt, requestId });
         incMetric("webhooks_delivered_total");
         const latencyMs = Date.now() - startedAt;
         return {
@@ -310,14 +330,14 @@ export async function deliverWebhook(
       }
 
       lastError = `HTTP ${response.status}`;
-      logger.warn("Webhook delivery failed", { url, status: response.status, attempt });
+      logger.warn("Webhook delivery failed", { url, status: response.status, attempt, requestId });
     } catch (err) {
       lastError = isTimeoutError(err)
         ? `Webhook delivery timed out after ${getWebhookTimeoutMs()}ms`
         : err instanceof Error
           ? err.message
           : String(err);
-      logger.warn("Webhook delivery error", { url, error: lastError, attempt });
+      logger.warn("Webhook delivery error", { url, error: lastError, attempt, requestId });
     }
 
     if (attempt < maxRetries) {
@@ -329,7 +349,7 @@ export async function deliverWebhook(
     }
   }
 
-  logger.error("Webhook delivery exhausted retries", { url, event: payload.event });
+  logger.error("Webhook delivery exhausted retries", { url, event: payload.event, requestId });
   incMetric("webhooks_failed_total");
   const latencyMs = Date.now() - startedAt;
   return {

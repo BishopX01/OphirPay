@@ -52,6 +52,8 @@ pub const FEE_KEY: Symbol = symbol_short!("FEE_CONF");
 pub const FEE_COLL: Symbol = symbol_short!("FEE_COLL");
 pub const TMLOCK_CNT: Symbol = symbol_short!("TMLOCK");
 pub const TMLOCK_DELAY: u64 = 86400; // 24 hours
+/// Owner-controlled switch for the 24h admin timelock. Missing ⇒ enabled.
+pub const TIMELOCK_ENABLED: Symbol = symbol_short!("TLOCK_EN");
 pub const GOV_CNT: Symbol = symbol_short!("GOV_CNT");
 pub const GOV_CONF: Symbol = symbol_short!("GOV_CONF");
 pub const EMITTER_ADDR: Symbol = symbol_short!("EMITTER");
