@@ -50,6 +50,13 @@ export function CsvBatchImport({
   const errorCount = rows.filter(
     (r) => Object.keys(r.errors).length > 0
   ).length;
+  /** Source row number + human-readable messages for every failing row. */
+  const invalidRows = rows
+    .filter((r) => Object.keys(r.errors).length > 0)
+    .map((r) => ({
+      sourceRow: r.sourceRow,
+      messages: Object.values(r.errors),
+    }));
   const isValid =
     rows.length > 0 &&
     fileErrors.length === 0 &&
@@ -210,6 +217,35 @@ export function CsvBatchImport({
           {msg}
         </div>
       ))}
+
+      {/* Row-level error summary — pins down exactly which source rows fail,
+          so one bad row never fails the import anonymously. */}
+      {invalidRows.length > 0 && (
+        <div
+          role="status"
+          data-testid="csv-row-errors"
+          className="p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-sm text-red-600 dark:text-red-400"
+        >
+          <p className="font-medium">
+            Fix {invalidRows.length} row{invalidRows.length !== 1 ? "s" : ""} to
+            continue:
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {invalidRows.map((r) => (
+              <li
+                key={r.sourceRow}
+                data-testid={`csv-row-error-${r.sourceRow}`}
+              >
+                {/* One element holding the whole sentence: testing-library's
+                    text queries read an element's direct text nodes, so a bare
+                    text node here would make every inline cell error resolve to
+                    two elements. */}
+                <span>{`Row ${r.sourceRow}: ${r.messages.join(" ")}`}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Row preview */}
       {rows.length > 0 && (

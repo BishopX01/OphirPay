@@ -165,6 +165,28 @@ describe("CsvBatchImport", () => {
     ).toBeInTheDocument();
   });
 
+  it("summarizes every failing row with its source row number", async () => {
+    setup();
+    await uploadFile(
+      screen.getByTestId("csv-file-input") as HTMLInputElement,
+      csvFile(
+        `address,amount,memo\nBAD_ONE,100,\n${VALID_ADDRESS},0,\n${OTHER_ADDRESS},5,\n`
+      )
+    );
+
+    const summary = await screen.findByTestId("csv-row-errors");
+    expect(summary).toHaveTextContent(/fix 2 rows to continue/i);
+    expect(screen.getByTestId("csv-row-error-1")).toHaveTextContent(
+      "Invalid Stellar address."
+    );
+    expect(screen.getByTestId("csv-row-error-2")).toHaveTextContent(
+      "Amount must be a number greater than 0."
+    );
+    // The summary repeats each message, but must not make the inline cell
+    // error ambiguous for exact-text queries.
+    expect(screen.getAllByText("Invalid Stellar address.")).toHaveLength(1);
+  });
+
   it("reports a file-level error when the file cannot be read", async () => {
     setup();
     const file = csvFile(
@@ -193,7 +215,15 @@ describe("CsvBatchImport", () => {
       csvFile(`address,amount,memo\n${VALID_ADDRESS},100,${"é".repeat(15)}\n`)
     );
 
-    expect(await screen.findByText(/28 bytes or fewer/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("csv-row-error-1")).toHaveTextContent(
+      /28 bytes or fewer/i
+    );
+    expect(
+      screen
+        .getAllByRole("alert")
+        .map((el) => el.textContent)
+        .join(" ")
+    ).toMatch(/28 bytes or fewer/i);
     expect(screen.getByTestId("csv-status")).toHaveTextContent(
       /fix the highlighted fields/i
     );
