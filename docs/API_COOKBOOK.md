@@ -209,6 +209,7 @@ curl -X POST "https://api.ophirpay.com/api/keys/key_01hv89q7a4mpx3n/rotate" \
 curl -X POST "https://api.ophirpay.com/api/payments" \
   -H "Authorization: Bearer ophir_live_sk_8f7b2c9e4a1d0f62b8e3c1a9" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 42ce12b8-4d15-4a34-8f52-7b2136a84462" \
   -d '{
     "recipient": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
     "asset": "USDC",
@@ -219,6 +220,11 @@ curl -X POST "https://api.ophirpay.com/api/payments" \
     "description": "Consulting invoice payout #0881"
   }'
 ```
+> `Idempotency-Key` is required on this route. Reuse the same value when
+> retrying: the first success is cached for 24 hours and a repeat returns
+> `409` with that original body (`Idempotency-Replay: true`) rather than
+> creating a second payment. See [API_GUIDE §6](./API_GUIDE.md#idempotent-mutations-idempotency-key-1440).
+
 **Response (`201 Created`):**
 ```json
 {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -12,13 +13,14 @@ import { useToast } from "@/components/ui/Toast";
 import { useApiQuery } from "@/hooks/useApiQuery";
 import { useWallet } from "@/hooks/useMultiWallet";
 import { usePageTitle } from "@/hooks/usePageTitle";
+import { useTableKeyboardNavigation } from "@/hooks/useTableKeyboardNavigation";
 import { cancelStream, claimStream, createStream } from "@/lib/contract-advanced";
 import { fetchRecentContractRecords } from "@/lib/on-chain-records";
 import { formatXlmStroops, parseXlmAmount } from "@/lib/stellar-amount";
 import { PAGE_TITLES } from "@/lib/page-titles";
 import { isValidStellarAddress } from "@/lib/stellar";
 import { computeVested, vestingPercent } from "@/lib/vesting";
-import { shortenAddress } from "@/lib/utils";
+import { cn, shortenAddress } from "@/lib/utils";
 import type { StreamData } from "@/types/contract-abi";
 
 function localDateTimeNow(): string {
@@ -29,6 +31,7 @@ function localDateTimeNow(): string {
 
 export default function StreamsPage() {
   usePageTitle(PAGE_TITLES.STREAMS);
+  const router = useRouter();
   const { wallet } = useWallet();
   const toast = useToast();
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -51,6 +54,15 @@ export default function StreamsPage() {
     undefined,
     () => fetchRecentContractRecords<StreamData>("streams"),
   );
+
+  const { activeIndex, getRowProps, onRowsKeyDown, tbodyRef } =
+    useTableKeyboardNavigation<HTMLDivElement>(streams.length, {
+      rowSelector: "[data-row-index]",
+      onActivate: (index) => {
+        const stream = streams[index];
+        if (stream) router.push(`/streams/${stream.id}`);
+      },
+    });
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 15_000);
@@ -161,8 +173,14 @@ export default function StreamsPage() {
           </p>
         </Card>
       ) : (
-        <div className="space-y-3">
-          {streams.map((stream) => {
+        <div
+          ref={tbodyRef}
+          onKeyDown={onRowsKeyDown}
+          role="list"
+          aria-label="Payment streams"
+          className="space-y-3"
+        >
+          {streams.map((stream, index) => {
             const id = Number(stream.id);
             const total = BigInt(stream.total_amount);
             const claimed = BigInt(stream.claimed_amount);
@@ -176,7 +194,17 @@ export default function StreamsPage() {
             const isCreator = wallet.publicKey === stream.creator;
             const isRecipient = wallet.publicKey === stream.recipient;
             return (
-              <Card key={id} className="space-y-4 p-4">
+              <div
+                key={id}
+                role="listitem"
+                data-row-index={index}
+                {...getRowProps(index)}
+                className={cn(
+                  "rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-ophir-500 dark:focus-visible:ring-offset-gray-900",
+                  index === activeIndex && "ring-2 ring-ophir-200 dark:ring-ophir-800"
+                )}
+              >
+              <Card className="space-y-4 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-semibold text-gray-900 dark:text-white">
                     <Link href={`/streams/${id}`} className="hover:underline">
@@ -226,6 +254,7 @@ export default function StreamsPage() {
                   </div>
                 )}
               </Card>
+              </div>
             );
           })}
         </div>

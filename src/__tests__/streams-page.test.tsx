@@ -13,6 +13,11 @@ const mockClaimStream = vi.hoisted(() => vi.fn());
 const mockCancelStream = vi.hoisted(() => vi.fn());
 const mockSuccess = vi.hoisted(() => vi.fn());
 const mockError = vi.hoisted(() => vi.fn());
+const mockPush = vi.hoisted(() => vi.fn());
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
 
 vi.mock("@/hooks/useApiQuery", () => ({
   useApiQuery: (...args: unknown[]) => mockUseApiQuery(...args),

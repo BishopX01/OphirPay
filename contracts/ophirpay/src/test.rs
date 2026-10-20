@@ -38,6 +38,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         // v27 client try_ variant surfaces the exact contract error
         assert_eq!(
             client.try_init(&owner),
@@ -56,6 +57,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // transfer_ownership is now a two-step proposal: the owner does not
         // change until the proposed new owner accepts after the timelock.
@@ -78,6 +80,7 @@ mod tests {
         let rando = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.transfer_ownership(&rando, &rando); // should panic
     }
 
@@ -96,6 +99,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let id = client.record_payment(
             &payer,
@@ -138,6 +142,7 @@ mod tests {
         let payee = Address::generate(&env);
         let sac = create_token_contract(&env, &owner);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         client.record_payment(
             &payer,
@@ -174,6 +179,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         assert_eq!(
             client.try_record_payment(
                 &payer,
@@ -199,6 +205,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.record_payment(
             &payer,
             &payee,
@@ -231,6 +238,7 @@ mod tests {
         sac_client.mint(&depositor, &10_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let escrow_id = client.create_escrow(
             &depositor,
@@ -272,6 +280,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.create_escrow(
             &depositor,
             &beneficiary,
@@ -308,6 +317,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.create_escrow(
             &depositor,
             &beneficiary,
@@ -364,6 +374,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.create_escrow(
             &depositor,
             &beneficiary,
@@ -395,6 +406,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let stream_id = client.create_stream(
             &creator,
@@ -441,6 +453,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.create_stream(
             &creator,
             &recipient,
@@ -532,6 +545,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let stream_id = client.create_stream(
             &creator,
@@ -581,6 +595,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let payees = vec![&env, p1.clone(), p2.clone(), p3.clone()];
         let amounts = vec![&env, 100i128, 200i128, 300i128];
@@ -623,6 +638,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let payees = Vec::<Address>::new(&env);
         let amounts = Vec::<i128>::new(&env);
@@ -649,6 +665,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         assert!(!client.is_paused());
 
         client.emergency_pause_all(&owner);
@@ -695,6 +712,7 @@ mod tests {
         sac_client.mint(&depositor, &1000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.emergency_pause_all(&owner);
 
         client.create_escrow(
@@ -724,6 +742,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.emergency_pause_all(&owner);
 
         client.create_stream(
@@ -752,6 +771,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.record_payment(
             &payer,
             &payee,
@@ -784,6 +804,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let signers = vec![&env, signer1.clone(), signer2.clone(), signer3.clone()];
         client.set_multisig_config(&owner, &2u32, &signers, &true);
@@ -822,6 +843,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let signers = vec![&env, signer1.clone(), signer2.clone(), signer3.clone()];
         client.set_multisig_config(&owner, &2u32, &signers, &true);
@@ -857,6 +879,7 @@ mod tests {
         let user = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.set_spending_limit(
             &owner,
             &user,
@@ -880,6 +903,7 @@ mod tests {
         let user = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.set_spending_limit(&owner, &user, &100i128, &1000i128, &0u64, &true);
 
         let result = client.check_spending(&user, &500i128);
@@ -896,6 +920,7 @@ mod tests {
         let user = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.configure_escalation(&owner, &100i128, &1000i128, &true);
 
         let result = client.check_spending(&user, &2000i128);
@@ -914,6 +939,7 @@ mod tests {
         let operator = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.grant_role(&owner, &operator, &Role::Operator);
 
         let role = client.get_role(&operator);
@@ -938,6 +964,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let _ = client.record_payment(
             &payer,
             &payee,
@@ -968,6 +995,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let id = client.create_recurring(
             &creator,
@@ -998,6 +1026,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let id = client.create_recurring(
             &creator,
@@ -1027,6 +1056,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let id = client.create_recurring(
             &creator,
             &payee,
@@ -1053,6 +1083,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.set_fee_config(&owner, &50u32, &100u32, &200u32, &10i128, &1i128, &true);
 
         let config = client.get_fee_config();
@@ -1088,6 +1119,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let id = client.propose_timelocked_action(
             &owner,
@@ -1117,6 +1149,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let id = client.propose_timelocked_action(
             &owner,
             &String::from_str(&env, "pause"),
@@ -1127,6 +1160,88 @@ mod tests {
         client.cancel_timelocked_action(&owner, &id);
         let action = client.get_timelocked_action(&id);
         assert!(action.executed);
+    }
+
+    #[test]
+    fn test_admin_actions_are_queued_and_dispatched_by_timelock() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(OphirPayContract, ());
+        let client = OphirPayContractClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let signer = Address::generate(&env);
+        let operator = Address::generate(&env);
+        let spender = Address::generate(&env);
+
+        let now = env.ledger().timestamp();
+        let _ = client.init(&owner);
+        assert!(client.is_timelock_enabled());
+
+        let signers = vec![&env, signer.clone()];
+        client.set_fee_config(&owner, &50u32, &100u32, &200u32, &10i128, &1i128, &true);
+        client.set_multisig_config(&owner, &1u32, &signers, &true);
+        client.grant_role(&owner, &operator, &Role::Operator);
+        client.configure_governance(&owner, &0i128, &1000u64, &51u32, &true);
+        client.set_spending_limit(&owner, &spender, &100i128, &1000i128, &0u64, &true);
+
+        // Nothing is applied before the 24h delay.
+        assert_eq!(client.get_timelock_count(), 5);
+        assert!(client.get_fee_config().is_none());
+        assert!(client.get_multisig_config().is_none());
+        assert!(client.get_role(&operator).is_none());
+        assert!(client.get_governance_config().is_none());
+        assert!(client.get_spending_limit(&spender).is_none());
+
+        // Every queued action is typed and stores its typed payload.
+        for id in 1..=5u64 {
+            let queued = client.get_timelocked_action(&id);
+            assert!(!matches!(queued.action, TimelockAction::Legacy));
+            assert!(!queued.executed);
+        }
+
+        // Premature execution is rejected for every action.
+        for id in 1..=5u64 {
+            assert_eq!(
+                client.try_execute_timelocked_action(&id),
+                Err(Ok(PaymentError::TimelockNotDue))
+            );
+        }
+
+        env.ledger().set_timestamp(now + TMLOCK_DELAY + 1);
+        for id in 1..=5u64 {
+            client.execute_timelocked_action(&id);
+        }
+
+        let fee = client.get_fee_config().unwrap();
+        assert_eq!(fee.payment_fee_bps, 50);
+        assert_eq!(client.get_multisig_config().unwrap().threshold, 1);
+        assert!(matches!(client.get_role(&operator), Some(Role::Operator)));
+        assert_eq!(client.get_governance_config().unwrap().quorum_bps, 51);
+        assert_eq!(client.get_spending_limit(&spender).unwrap().daily_limit, 100);
+
+        // Executed actions cannot be replayed.
+        assert_eq!(
+            client.try_execute_timelocked_action(&1),
+            Err(Ok(PaymentError::TimelockAlreadyExecuted))
+        );
+    }
+
+    #[test]
+    fn test_admin_actions_execute_immediately_when_timelock_disabled() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(OphirPayContract, ());
+        let client = OphirPayContractClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+
+        let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
+        assert!(!client.is_timelock_enabled());
+
+        client.set_fee_config(&owner, &50u32, &100u32, &200u32, &10i128, &1i128, &true);
+
+        assert_eq!(client.get_timelock_count(), 0);
+        assert_eq!(client.get_fee_config().unwrap().payment_fee_bps, 50);
     }
 
     // ── Governance Tests ───────────────────────────────────
@@ -1143,6 +1258,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         client.configure_governance(&owner, &0i128, &1000u64, &51u32, &true);
 
@@ -1185,6 +1301,7 @@ mod tests {
         let payee = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let asset = Address::generate(&env);
         let pid = client.record_payment(
             &payer,
@@ -1224,6 +1341,7 @@ mod tests {
         sac_client.mint(&owner, &10_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let pid = client.record_payment(
             &payer,
             &payee,
@@ -1272,6 +1390,7 @@ mod tests {
         let asset = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let pid = client.record_payment(
             &payer,
             &payee,
@@ -1324,6 +1443,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let result = client.try_get_refund(&999);
         assert!(result.is_err());
     }
@@ -1339,6 +1459,7 @@ mod tests {
         let payee = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let asset = Address::generate(&env);
         let pid = client.record_payment(
             &payer,
@@ -1380,6 +1501,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Pause all (even without emitter linked, pauses OphirPay)
         client.emergency_pause_all(&owner);
@@ -1400,6 +1522,7 @@ mod tests {
         let emitter = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.set_emitter(&owner, &emitter);
 
         let stored = client.get_emitter();
@@ -1418,6 +1541,7 @@ mod tests {
         let subscriber = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let hid = client.register_hook(
             &subscriber,
@@ -1454,6 +1578,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         let hooks = client.get_hooks_by_event(&String::from_str(&env, "nonexistent"));
         assert_eq!(hooks.len(), 0);
     }
@@ -1469,6 +1594,7 @@ mod tests {
         let owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Set config twice
         client.set_fee_config(&owner, &100u32, &200u32, &300u32, &10i128, &1i128, &true);
@@ -1499,6 +1625,7 @@ mod tests {
         let s3 = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let signers_v1 = vec![&env, s1.clone(), s2.clone()];
         client.set_multisig_config(&owner, &2u32, &signers_v1, &true);
@@ -1523,6 +1650,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Propose transfer
         client.transfer_ownership(&owner, &new_owner);
@@ -1556,6 +1684,7 @@ mod tests {
         let new_owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.transfer_ownership(&owner, &new_owner);
         // Should panic — timelock hasn't elapsed
         client.accept_ownership(&new_owner);
@@ -1571,6 +1700,7 @@ mod tests {
         let new_owner = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.transfer_ownership(&owner, &new_owner);
         assert!(client.get_pending_owner().is_some());
 
@@ -1599,6 +1729,7 @@ mod tests {
         sac_client.mint(&contract_id, &5_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Create an escrow — this locks 1000 tokens
         client.create_escrow(
@@ -1638,6 +1769,7 @@ mod tests {
         sac_client.mint(&depositor, &10_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         client.create_escrow(
             &depositor,
@@ -1674,6 +1806,7 @@ mod tests {
         sac_client.mint(&depositor, &10_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let deadline = env.ledger().timestamp() + 100;
         client.create_escrow(
@@ -1709,6 +1842,7 @@ mod tests {
 
         let owner = Address::generate(&env);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Create 150 fee config changes
         for i in 0u32..150u32 {
@@ -1748,6 +1882,7 @@ mod tests {
         sac_client.mint(&contract_id, &10_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Record a payment first
         client.record_payment(
@@ -1802,6 +1937,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         client.record_payment(
             &payer,
@@ -1843,6 +1979,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Configure 2-of-3 multisig
         let signers = vec![&env, signer1.clone(), signer2.clone(), signer3.clone()];
@@ -1892,6 +2029,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let signers = vec![&env, signer1.clone(), signer2.clone()];
         client.set_multisig_config(&owner, &2u32, &signers, &true);
@@ -1928,6 +2066,7 @@ mod tests {
 
         let now = env.ledger().timestamp();
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Set spending limit that expires in 100 seconds
         client.set_spending_limit(&owner, &payer, &10000i128, &50000i128, &(now + 100), &true);
@@ -1986,6 +2125,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         client.set_spending_limit(&owner, &payer, &5000i128, &10000i128, &0, &true);
 
@@ -2038,6 +2178,7 @@ mod tests {
         let voter = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         client.configure_governance(&owner, &0i128, &1000u64, &51u32, &true);
 
         let deposit_asset = Address::generate(&env);
@@ -2071,6 +2212,7 @@ mod tests {
         let proposer = Address::generate(&env);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         // Set min_proposal_deposit to 100
         client.configure_governance(&owner, &100i128, &1000u64, &51u32, &true);
 
@@ -2102,6 +2244,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         assert_eq!(client.is_reentrancy_locked(), false);
         assert_eq!(client.get_locked_balance(), 0);
@@ -2187,6 +2330,7 @@ mod tests {
         sac_client.mint(&user, &10_000_000i128);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
         assert_eq!(client.get_locked_balance(), 0);
 
         // 1. Create Escrow 1 (1_000_000)
@@ -2260,6 +2404,7 @@ mod tests {
         let client = OphirPayContractClient::new(&env, &contract_id);
         let owner = Address::generate(&env);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let (min, max, maintenance) = client.get_bump_policy();
         assert_eq!(min, 5_000);
@@ -2297,6 +2442,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Record a payment so there's a persistent entry to bump.
         client.record_payment(
@@ -2377,6 +2523,7 @@ mod tests {
         let sac = create_token_contract(&env, &owner);
 
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // Create 2 payments and 1 batch (2 payments in batch).
         client.record_payment(
@@ -2445,6 +2592,7 @@ mod tests {
         let owner = Address::generate(&env);
         let subscriber = Address::generate(&env);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let overflow_count = MAX_READER_ENTRIES + 5;
         for i in 0..overflow_count {
@@ -2486,6 +2634,7 @@ mod tests {
         let owner = Address::generate(&env);
         let subscriber = Address::generate(&env);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         for _ in 0..MAX_READER_ENTRIES {
             client.register_hook(
@@ -2516,6 +2665,7 @@ mod tests {
         let payee = Address::generate(&env);
         let sac = create_token_contract(&env, &owner);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         let overflow_count: u64 = (MAX_READER_ENTRIES + 5) as u64;
         for _ in 0..overflow_count {
@@ -2577,6 +2727,7 @@ mod tests {
         let payee = Address::generate(&env);
         let sac = create_token_contract(&env, &owner);
         let _ = client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         // The batch record is written straight to storage rather than through
         // `create_batch`: the writer emits one event per recipient and a

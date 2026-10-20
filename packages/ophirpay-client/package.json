@@ -14,6 +14,9 @@
     "./operations": {
       "types": "./operations.generated.d.ts",
       "default": "./operations.generated.js"
+    },
+    "./types": {
+      "types": "./api-types.generated.d.ts"
     }
   },
   "files": [
@@ -21,6 +24,7 @@
     "index.d.ts",
     "operations.generated.js",
     "operations.generated.d.ts",
+    "api-types.generated.d.ts",
     "README.md"
   ],
   "engines": {

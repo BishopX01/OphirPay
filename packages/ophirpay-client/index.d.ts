@@ -12,6 +12,29 @@ import type { ApiOperation, ApiOperationName } from "./operations.generated.d.ts
 
 export type { ApiOperation, ApiOperationName };
 
+/**
+ * Types generated from `docs/openapi.yaml` by `npm run generate:sdk`
+ * (issue #1439). Every operation name in the catalogue has a matching entry in
+ * each map, so a request or response shape cannot be transcribed by hand.
+ *
+ * `ProblemDetails` is deliberately not re-exported here — this module already
+ * declares the richer SDK-facing version below.
+ */
+export type {
+  ApiHeaderParams,
+  ApiPathParams,
+  ApiQueryParams,
+  ApiRequestBodies,
+  ApiResponseBodies,
+  BatchResponse,
+  CreateBatchRequest,
+  CreatePaymentRequest,
+  PaginatedBatches,
+  PaginatedPayments,
+  PaymentEnvelopeResponse,
+  PaymentResponse,
+} from "./api-types.generated.js";
+
 export type PaymentStatus =
   | "CREATED"
   | "PENDING"

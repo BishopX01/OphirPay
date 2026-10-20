@@ -161,6 +161,13 @@ export class OphirPayClient {
   async request(method, path, options = {}) {
     const { pathParams, query, body, headers = {}, idempotencyKey } = options;
 
+    // Mutations must carry an idempotency key (issue #1440). Callers can pass
+    // their own — and SHOULD, when they control retries — but defaulting to a
+    // fresh UUID keeps `createPayment({...})` working instead of failing with
+    // a 400 now that the header is required.
+    const effectiveIdempotencyKey =
+      idempotencyKey ?? (method.toUpperCase() === "POST" ? crypto.randomUUID() : undefined);
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -173,7 +180,9 @@ export class OphirPayClient {
           Accept: "application/json",
           ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
           ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
-          ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+          ...(effectiveIdempotencyKey
+            ? { "Idempotency-Key": effectiveIdempotencyKey }
+            : {}),
           ...this.defaultHeaders,
           ...headers,
         },

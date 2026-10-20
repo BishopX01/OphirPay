@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 import { logger } from "@/lib/logger";
+import { getCurrentRequestId } from "@/lib/request-logging";
+import { REQUEST_ID_HEADER } from "@/lib/request-id";
 import { incMetric } from "@/lib/metrics-counters";
 import { isSafeWebhookUrlAtDelivery } from "@/lib/webhook-url-guard";
 import { RETRY_CONFIG } from "@/lib/retry-config";
@@ -17,6 +19,13 @@ export interface WebhookPayload {
   event: string;
   timestamp: string;
   data: Record<string, unknown>;
+  /**
+   * Correlation id of the API request that originated this event. Copied from
+   * the request's async context when available and included in the signed
+   * body plus the `X-Request-Id` delivery header so a subscriber can trace a
+   * webhook back through our logs to the request that caused it.
+   */
+  requestId?: string;
   /** Present and true only for integrator test events — never real payments. */
   test?: boolean;
 }
@@ -33,57 +42,35 @@ export const WEBHOOK_TIMESTAMP_HEADER = "X-OphirPay-Timestamp";
 export const WEBHOOK_SIGNATURE_HEADER = "X-OphirPay-Signature";
 export const WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 300;
 
-// ── Retry schedule ─────────────────────────────────────────────
-//
-// `deliverWebhook` retries a few times in-process for a transient blip, but a
-// subscriber outage (502/503, DNS timeout) can outlast a request. Failures are
-// therefore persisted as RETRYING with the next attempt time, and the cron
-// processor drains the queue on this exponential schedule:
-//
-//   attempt 1 →  1 min      attempt 4 →  1 hour
-//   attempt 2 →  5 min      attempt 5 →  4 hours
-//   attempt 3 → 15 min      then DEAD_LETTER
-
-export const WEBHOOK_RETRY_BACKOFF_MS = [
-  60_000,
-  5 * 60_000,
-  15 * 60_000,
-  60 * 60_000,
-  4 * 60 * 60_000,
-] as const;
-
-/** Number of scheduled retries before a delivery is dead-lettered. */
-export const WEBHOOK_MAX_RETRIES = WEBHOOK_RETRY_BACKOFF_MS.length;
-
-/** Maximum deliveries a single cron run will process. */
-export const WEBHOOK_RETRY_QUEUE_BATCH_SIZE = 50;
+/**
+ * Largest raw request body the verifier will parse (1 MiB).
+ *
+ * `verifyWebhookSignature` receives a body from an unauthenticated HTTP
+ * client, so its cost must be bounded *before* `JSON.parse` and the HMAC see
+ * it: an attacker who can post a 500 MiB body would otherwise make the
+ * receiver spend CPU and memory on a payload that can never verify. The
+ * delivered envelopes are kilobytes (a batch envelope is capped at 100 child
+ * payments), so 1 MiB is orders of magnitude of headroom.
+ */
+export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 /**
- * Delay before the next attempt, given how many scheduled retries have already
- * run. Returns `null` once the schedule is exhausted (the caller must then
- * dead-letter the delivery).
+ * Coerce a header/body value to the string used in the signed input, without
+ * ever invoking attacker-controlled `toString`/`valueOf`.
+ *
+ * Header values, body timestamps and signatures all arrive from outside. A
+ * plain `String(value)` throws `TypeError` for an object with a null
+ * prototype (or one whose `toString` throws), which is exactly the kind of
+ * input a fuzzer finds. Objects and symbols therefore collapse to `""` — they
+ * can never be a valid timestamp or hex digest anyway — while primitives keep
+ * the coercion the sender used.
  */
-export function webhookRetryDelayMs(retriesCompleted: number): number | null {
-  const index = Math.max(0, Math.floor(retriesCompleted));
-  return WEBHOOK_RETRY_BACKOFF_MS[index] ?? null;
-}
-
-/** Absolute time of the next attempt, or `null` when retries are exhausted. */
-export function nextWebhookAttemptAt(
-  retriesCompleted: number,
-  from: Date = new Date()
-): Date | null {
-  const delayMs = webhookRetryDelayMs(retriesCompleted);
-  return delayMs === null ? null : new Date(from.getTime() + delayMs);
-}
-
-/** Delivery status to persist after a failed attempt. */
-export function deliveryStatusAfterFailure(
-  retriesCompleted: number
-): DeliveryStatus {
-  return webhookRetryDelayMs(retriesCompleted) === null
-    ? ("DEAD_LETTER" as DeliveryStatus)
-    : ("RETRYING" as DeliveryStatus);
+function toSignedString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "symbol" || typeof value === "object") return "";
+  if (typeof value === "function") return "";
+  return String(value);
 }
 
 export function webhookSignedInput(
@@ -124,6 +111,7 @@ export function constantTimeEqual(a: string, b: string): boolean {
 export type WebhookVerificationReason =
   | "valid"
   | "invalid body"
+  | "body too large"
   | "signature mismatch"
   | "missing or invalid timestamp"
   | "payload too old — possible replay"
@@ -163,8 +151,14 @@ export interface WebhookVerificationResult {
  * This is the canonical in-repo receiver: subscriber examples in
  * `examples/webhook-verification/` mirror it, and the contract is documented in
  * `docs/webhook-verification.md`. It never throws on malformed input — a
- * truncated/oversized signature, a non-JSON body or an unparseable timestamp
- * all yield `{ valid: false, reason }`.
+ * truncated/oversized signature, a non-JSON body, an oversized body, a
+ * non-string header or an unparseable timestamp all yield
+ * `{ valid: false, reason }`.
+ *
+ * The whole path is wrapped in a final `try/catch`: every rejection above is
+ * explicit and intentional, and the catch exists so a future edit (or an
+ * exotic runtime value the checks do not anticipate) still degrades to
+ * "invalid" instead of surfacing a 500 to an unauthenticated caller.
  *
  * @example
  * ```ts
@@ -185,51 +179,72 @@ export function verifyWebhookSignature({
   maxAgeSeconds = WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS,
   now = Date.now(),
 }: WebhookVerificationInput): WebhookVerificationResult {
-  let parsed: WebhookPayload;
-  let canonical: string;
   try {
-    const raw: unknown = JSON.parse(body);
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    // A body or secret that is not a string cannot have been signed by us.
+    // Checked before touching either so no implicit coercion (which is where
+    // `String(attackerObject)` would run user code) ever happens.
+    if (typeof body !== "string" || typeof secret !== "string") {
       return { valid: false, reason: "invalid body" };
     }
-    parsed = raw as WebhookPayload;
-    // Empty the signature field (do NOT delete the key) — the HMAC covers
-    // `"signature":""` as the last member.
-    canonical = JSON.stringify({ ...parsed, signature: "" });
+    // Bounded work: reject before JSON.parse / HMAC on a body that could only
+    // ever be a denial-of-service attempt.
+    if (Buffer.byteLength(body, "utf8") > MAX_WEBHOOK_BODY_BYTES) {
+      return { valid: false, reason: "body too large" };
+    }
+
+    let parsed: WebhookPayload;
+    let canonical: string;
+    try {
+      const raw: unknown = JSON.parse(body);
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        return { valid: false, reason: "invalid body" };
+      }
+      parsed = raw as WebhookPayload;
+      // Empty the signature field (do NOT delete the key) — the HMAC covers
+      // `"signature":""` as the last member.
+      canonical = JSON.stringify({ ...parsed, signature: "" });
+    } catch {
+      return { valid: false, reason: "invalid body" };
+    }
+
+    // The timestamp is authenticated (it is prepended to the canonical body),
+    // so the header is safe to trust for replay protection. Prefer the header,
+    // fall back to the body field, which is signed too. Either may be absent,
+    // non-string or an object — `toSignedString` normalises it without running
+    // attacker-controlled conversions.
+    const signedTimestamp = toSignedString(timestamp ?? parsed.timestamp ?? "");
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(webhookSignedInput(signedTimestamp, canonical))
+      .digest("hex");
+
+    // Constant-time comparison — see constantTimeEqual. Length mismatches
+    // return false without throwing (acceptance criterion of issue #1386).
+    if (!constantTimeEqual(toSignedString(signature), expected)) {
+      return { valid: false, reason: "signature mismatch" };
+    }
+
+    if (maxAgeSeconds > 0) {
+      const ts = Date.parse(signedTimestamp);
+      if (Number.isNaN(ts)) {
+        return { valid: false, reason: "missing or invalid timestamp" };
+      }
+      const ageSeconds = (now - ts) / 1000;
+      if (ageSeconds > maxAgeSeconds) {
+        return { valid: false, reason: "payload too old — possible replay" };
+      }
+      if (ageSeconds < -maxAgeSeconds) {
+        return { valid: false, reason: "payload timestamp is in the future" };
+      }
+    }
+
+    return { valid: true, reason: "valid" };
   } catch {
+    // Safety net: no input may throw out of the verifier. The explicit checks
+    // above are expected to catch everything, so reaching here means an
+    // unforeseen value — fail closed, never 500.
     return { valid: false, reason: "invalid body" };
   }
-
-  // The timestamp is authenticated (it is prepended to the canonical body), so
-  // the header is safe to trust for replay protection. Prefer the header, fall
-  // back to the body field, which is signed too.
-  const signedTimestamp = String(timestamp ?? parsed.timestamp ?? "");
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(webhookSignedInput(signedTimestamp, canonical))
-    .digest("hex");
-
-  // Constant-time comparison — see constantTimeEqual. Length mismatches return
-  // false without throwing (acceptance criterion of issue #1386).
-  if (!constantTimeEqual(String(signature ?? ""), expected)) {
-    return { valid: false, reason: "signature mismatch" };
-  }
-
-  if (maxAgeSeconds > 0) {
-    const ts = Date.parse(signedTimestamp);
-    if (Number.isNaN(ts)) {
-      return { valid: false, reason: "missing or invalid timestamp" };
-    }
-    const ageSeconds = (now - ts) / 1000;
-    if (ageSeconds > maxAgeSeconds) {
-      return { valid: false, reason: "payload too old — possible replay" };
-    }
-    if (ageSeconds < -maxAgeSeconds) {
-      return { valid: false, reason: "payload timestamp is in the future" };
-    }
-  }
-
-  return { valid: true, reason: "valid" };
 }
 
 export function signWebhookPayload(payload: WebhookPayload, secret: string): string {
@@ -284,6 +299,9 @@ export function buildWebhookRequestPreview(
       [WEBHOOK_SIGNATURE_HEADER]: signature,
       "X-OphirPay-Event": payload.event,
       [WEBHOOK_TIMESTAMP_HEADER]: timestamp,
+      ...(payload.requestId
+        ? { [REQUEST_ID_HEADER]: payload.requestId }
+        : {}),
     },
   };
 }
@@ -295,7 +313,15 @@ export async function deliverWebhook(
   maxRetries: number = RETRY_CONFIG.webhook.maxAttempts
 ): Promise<WebhookDeliveryDetails> {
   const startedAt = Date.now();
-  const request = buildWebhookRequestPreview(payload, secret);
+  // Prefer an explicit id (replay/redelivery of a stored event) and fall back
+  // to the request context of the caller. Building the signed payload from
+  // this normalized object means the id is covered by the HMAC and cannot be
+  // altered in transit.
+  const requestId = payload.requestId ?? getCurrentRequestId();
+  const deliveryPayload: WebhookPayload = requestId
+    ? { ...payload, requestId }
+    : payload;
+  const request = buildWebhookRequestPreview(deliveryPayload, secret);
   let lastStatusCode: number | undefined;
   let lastResponseBody = "";
   let lastError: string | undefined;
@@ -344,7 +370,7 @@ export async function deliverWebhook(
       lastStatusCode = response.status;
 
       if (response.ok) {
-        logger.info("Webhook delivered", { url, event: payload.event, attempt });
+        logger.info("Webhook delivered", { url, event: payload.event, attempt, requestId });
         incMetric("webhooks_delivered_total");
         const latencyMs = Date.now() - startedAt;
         return {
@@ -363,14 +389,14 @@ export async function deliverWebhook(
       }
 
       lastError = `HTTP ${response.status}`;
-      logger.warn("Webhook delivery failed", { url, status: response.status, attempt });
+      logger.warn("Webhook delivery failed", { url, status: response.status, attempt, requestId });
     } catch (err) {
       lastError = isTimeoutError(err)
         ? `Webhook delivery timed out after ${getWebhookTimeoutMs()}ms`
         : err instanceof Error
           ? err.message
           : String(err);
-      logger.warn("Webhook delivery error", { url, error: lastError, attempt });
+      logger.warn("Webhook delivery error", { url, error: lastError, attempt, requestId });
     }
 
     if (attempt < maxRetries) {
@@ -382,7 +408,7 @@ export async function deliverWebhook(
     }
   }
 
-  logger.error("Webhook delivery exhausted retries", { url, event: payload.event });
+  logger.error("Webhook delivery exhausted retries", { url, event: payload.event, requestId });
   incMetric("webhooks_failed_total");
   const latencyMs = Date.now() - startedAt;
   return {

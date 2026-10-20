@@ -330,10 +330,16 @@ function PaymentsClient() {
     ? paginated.slice(windowStart, windowEnd)
     : paginated;
 
-  // Roving-tabindex keyboard navigation: the active row is in the tab order
-  // and ArrowUp/Down/Home/End move between rows (also from row actions).
+  // Roving-tabindex keyboard navigation: the active row is in the tab order,
+  // ArrowUp/Down/Home/End move between rows (also from row actions), and
+  // Enter opens the focused payment's detail view.
   const { activeIndex, getRowProps, onRowsKeyDown, tbodyRef } =
-    useTableKeyboardNavigation(visibleRows.length);
+    useTableKeyboardNavigation(visibleRows.length, {
+      onActivate: (index) => {
+        const payment = visibleRows[index];
+        if (payment) router.push(`/payments/${payment.id}`);
+      },
+    });
 
   const goToPage = (target: number) => updateQuery({ page: target <= 1 ? null : String(target) });
 
@@ -670,6 +676,7 @@ function PaymentsClient() {
           )}
           <table
             className="w-full text-sm"
+            aria-label="On-chain payments"
             aria-busy={loading}
             aria-rowcount={filtered.length + 1}
           >
@@ -730,6 +737,7 @@ function PaymentsClient() {
                     aria-rowindex={startIndex + windowStart + index + 2}
                     className={cn(
                       "border-b border-gray-100 dark:border-gray-800/50 transition-colors",
+                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ophir-500",
                       index === activeIndex
                         ? "bg-ophir-50/70 dark:bg-ophir-950/40 hover:bg-ophir-100/70 dark:hover:bg-ophir-900/40"
                         : "hover:bg-gray-50 dark:hover:bg-gray-800/30"

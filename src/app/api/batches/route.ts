@@ -4,7 +4,7 @@ import { ERROR_CODES } from "@/lib/error-codes";
 
 import type { PaymentStatus } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { createBatchSchema, idempotencyKeySchema, paginationSchema } from "@/lib/validation-schemas";
+import { createBatchSchema, paginationSchema } from "@/lib/validation-schemas";
 import {
   successResponse,
   validationError,
@@ -18,7 +18,6 @@ import { getAuthContext } from "@/lib/auth-session";
 import { requireScope } from "@/lib/api-route";
 import { verifyCsrf } from "@/lib/csrf";
 import { incMetric } from "@/lib/metrics-counters";
-import crypto from "crypto";
 import {
   buildCursorWhere,
   computeNextCursor,
@@ -30,7 +29,7 @@ import {
   claimIdempotencyKey,
   type IdempotencyClaim,
 } from "@/lib/idempotency";
-import { NextResponse } from "next/server";
+import { requireIdempotencyKey } from "@/lib/api-route";
 
 // ── GET /api/batches — List batches with pagination ──────────
 
@@ -209,19 +208,15 @@ export const POST = withMetrics("POST /api/batches", withRequestLogging(async fu
       parsed.data;
     const { userId } = auth;
 
-    // Idempotency key (issue #170): the `Idempotency-Key` header takes
-    // precedence over the optional body field. A present-but-invalid header —
-    // including a whitespace-only value — is a validation error; it must never
-    // silently fall back to a fresh key, which would allow duplicate batches.
-    let idempotencyKey = parsed.data.idempotencyKey;
-    const headerKey = request.headers.get("idempotency-key");
-    if (headerKey !== null) {
-      const headerCheck = idempotencyKeySchema.safeParse(headerKey);
-      if (!headerCheck.success) {
-        return validationError(headerCheck.error);
-      }
-      idempotencyKey = headerCheck.data;
-    }
+    // Idempotency key (issues #170, #1440): the `Idempotency-Key` header is
+    // REQUIRED on every batch submission. It used to be optional (with an
+    // optional `idempotencyKey` body field as fallback), which meant a client
+    // that simply omitted it got a fresh key per retry — exactly the duplicate
+    // batch this guard exists to prevent. The body field is still accepted by
+    // the schema for backwards compatibility but is no longer used.
+    const idempotency = requireIdempotencyKey(request);
+    if (!idempotency.ok) return idempotency.response;
+    const idempotencyKey = idempotency.key;
 
     // ── Atomic idempotency claim (issue #1366) ─────────────────
     //
@@ -235,19 +230,20 @@ export const POST = withMetrics("POST /api/batches", withRequestLogging(async fu
     // With Redis unset/unreachable the claim is `unavailable` and this route
     // behaves exactly as it did before: the unique (userId, idempotencyKey)
     // index is still the durable guarantee, the lease is only the fast path.
-    claim = idempotencyKey
-      ? await claimIdempotencyKey(userId, idempotencyKey)
-      : null;
+    claim = await claimIdempotencyKey(userId, idempotencyKey);
 
     if (claim?.status === "replay") {
-      // The stored status and body, so a replay is byte-identical to what the
-      // first request received (201 for a fresh batch, 200 for a deduplicated
-      // one). `Idempotent-Replay` is what lets a caller tell the difference
-      // between that and new work.
+      // 409 with the byte-identical body the first request received (#1440):
+      // the caller must be able to distinguish "already submitted" from "this
+      // retry submitted", or a retry loop looks successful twice. The original
+      // status is preserved in `X-Original-Status` for clients that need it.
       incMetric("batches_processed_total");
-      return NextResponse.json(claim.response.body, {
-        status: claim.response.status,
-        headers: { "Idempotent-Replay": "true" },
+      return Response.json(claim.response.body, {
+        status: 409,
+        headers: {
+          "Idempotency-Replay": "true",
+          "X-Original-Status": String(claim.response.status),
+        },
       });
     }
 
@@ -335,10 +331,9 @@ export const POST = withMetrics("POST /api/batches", withRequestLogging(async fu
             name,
             description,
             userId,
-            // Server-generated when the client sends no key, so every batch
-            // records an idempotency key. Deduplication only applies to
-            // client-supplied keys, which retries actually re-send.
-            idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
+            // Always the client-supplied key — it is required by the guard
+            // above, so every batch records the key its retries reuse.
+            idempotencyKey,
           },
         });
 

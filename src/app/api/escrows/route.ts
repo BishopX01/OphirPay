@@ -8,6 +8,7 @@ import { verifyCsrf } from "@/lib/csrf";
 import { simulateContractCall, DEFAULT_CONTRACT_ID, CHAIN_READ_SOURCE } from "@/lib/contracts";
 import { nativeToScVal } from "@stellar/stellar-sdk";
 import { withRequestLogging } from "@/lib/request-logging";
+import { requireIdempotencyKey, withIdempotency } from "@/lib/api-route";
 
 /**
  * GET /api/escrows — list escrows or fetch single by ?id=N
@@ -70,10 +71,21 @@ export const POST = withMetrics("POST /api/escrows", withRequestLogging(async fu
       return badRequestError("depositor, beneficiary, and amount are required");
     }
 
-    return successResponse({
-      message: "Escrow creation requires wallet signing via the client-side createEscrow flow.",
-      params: { depositor, beneficiary, amount, asset: asset ?? "native", deadline, metadata },
-    }, undefined, 202);
+    // Required for the same reason as the payment route (issue #1440): the
+    // returned parameters are handed to the wallet to sign, and a duplicated
+    // submit would sign and broadcast the escrow twice.
+    const idempotency = requireIdempotencyKey(request);
+    if (!idempotency.ok) return idempotency.response;
+
+    return await withIdempotency(
+      request,
+      { userId: auth.userId, key: idempotency.key },
+      () =>
+        successResponse({
+          message: "Escrow creation requires wallet signing via the client-side createEscrow flow.",
+          params: { depositor, beneficiary, amount, asset: asset ?? "native", deadline, metadata },
+        }, undefined, 202)
+    );
   } catch (err) {
     return handleApiError(err, "POST /api/escrows");
   }

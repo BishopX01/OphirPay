@@ -2,7 +2,7 @@
 
 import { PrismaClient, Prisma } from "@prisma/client";
 import { logger } from "@/lib/logger";
-import { beginAsyncOperation, registerShutdownTask } from "@/lib/lifecycle";
+import { recordDbQuery } from "@/lib/metrics-counters";
 
 export { Prisma, PrismaClient };
 
@@ -57,7 +57,8 @@ const prismaClientSingleton = () => {
           } finally {
             const duration = performance.now() - start;
             checkConnectionAcquisitionWait(duration, operation, model);
-            release();
+            // Latency histogram labelled by model + operation (SLO + Grafana).
+            recordDbQuery(model ?? "unknown", operation, duration / 1000);
           }
         },
       },

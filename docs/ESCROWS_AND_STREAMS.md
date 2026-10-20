@@ -41,6 +41,11 @@ contract. The HTTP API is a thin read/write façade:
   the request, assemble the parameters, and return them with a `202 Accepted`
   response. **The calling client must sign and submit the transaction** using
   the Freighter wallet or another Stellar-compatible signer.
+- Both write endpoints require an `Idempotency-Key` header (see
+  [API_GUIDE §6](./API_GUIDE.md#idempotent-mutations-idempotency-key-1440)).
+  Re-sending the same key returns `409` with the original parameters and
+  `Idempotency-Replay: true` instead of a second set to sign, which is what
+  stops a retried request from broadcasting the same escrow/stream twice.
 
 This split means the server never holds private keys, and the on-chain state is
 always the authoritative source of truth.
@@ -199,6 +204,7 @@ the client must use to sign and submit the `create_escrow` contract call.
 POST /api/escrows HTTP/1.1
 Authorization: Bearer ophirpay_sk_live_abc123
 Content-Type: application/json
+Idempotency-Key: 42ce12b8-4d15-4a34-8f52-7b2136a84462
 x-csrf-token: tok_csrf_example
 Cookie: __Host-csrf=tok_csrf_example
 
@@ -462,6 +468,7 @@ the client must use to sign and submit the `create_stream` contract call.
 POST /api/streams HTTP/1.1
 Authorization: Bearer ophirpay_sk_live_abc123
 Content-Type: application/json
+Idempotency-Key: 42ce12b8-4d15-4a34-8f52-7b2136a84462
 x-csrf-token: tok_csrf_example
 Cookie: __Host-csrf=tok_csrf_example
 

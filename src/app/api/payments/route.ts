@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { withMetrics } from "@/lib/metrics-middleware";
 
-import crypto from "crypto";
 import prisma from "@/lib/prisma";
 import {
   problemBadRequest,
@@ -21,6 +20,7 @@ import { WEBHOOK_EVENTS } from "@/app/api/webhooks/event-types";
 import { incMetric } from "@/lib/metrics-counters";
 import { buildPaymentWhere } from "@/lib/payment-filters";
 import { invalidateCaches } from "@/lib/api-cache";
+import { requireIdempotencyKey, withIdempotency } from "@/lib/api-route";
 import {
   buildCursorWhere,
   computeNextCursor,
@@ -148,52 +148,66 @@ export const POST = withMetrics("POST /api/payments", withRequestLogging(async f
     const parsed = createPaymentSchema.safeParse(body);
     if (!parsed.success) return problemFromZodError(parsed.error, { instance });
 
-    const payment = await prisma.payment.create({
-      data: {
-        amount: parsed.data.amount,
-        assetCode: parsed.data.assetCode,
-        assetIssuer: parsed.data.assetIssuer,
-        description: parsed.data.description,
-        memo: parsed.data.memo,
-        // Server-generated idempotency key — every attempt (original or
-        // retried) carries its own key, so attempts are never confused.
-        idempotencyKey: crypto.randomUUID(),
-        status: "CREATED",
-        // The authenticated user owns the record; sourceAccountId is a
-        // Stellar account reference, NOT the User FK (previously this
-        // wrote a Stellar address into userId, breaking the relation).
-        userId: auth.userId,
-        sourceAccountId: parsed.data.sourceAccountId,
-      },
-    });
+    // Idempotency (issue #1440): a retry without a key used to create a second
+    // payment record, and a client-side double-submit could therefore move
+    // funds twice. The key is required, stored on the row and used to replay
+    // the original response instead of writing again.
+    const idempotency = requireIdempotencyKey(request);
+    if (!idempotency.ok) return idempotency.response;
 
-    logger.info("Payment created", { id: payment.id, amount: payment.amount });
+    return await withIdempotency(
+      request,
+      { userId: auth.userId, key: idempotency.key },
+      async () => {
+        const payment = await prisma.payment.create({
+          data: {
+            amount: parsed.data.amount,
+            assetCode: parsed.data.assetCode,
+            assetIssuer: parsed.data.assetIssuer,
+            description: parsed.data.description,
+            memo: parsed.data.memo,
+            // The client's key, persisted so the row records which logical
+            // operation created it (and operators can reconcile retries).
+            idempotencyKey: idempotency.key,
+            status: "CREATED",
+            // The authenticated user owns the record; sourceAccountId is a
+            // Stellar account reference, NOT the User FK (previously this
+            // wrote a Stellar address into userId, breaking the relation).
+            userId: auth.userId,
+            sourceAccountId: parsed.data.sourceAccountId,
+          },
+        });
 
-    dispatchWebhookEventAsync(
-      WEBHOOK_EVENTS.PAYMENT_CREATED,
-      {
-        paymentId: payment.id,
-        amount: payment.amount,
-        assetCode: payment.assetCode,
-        status: payment.status,
-        createdAt: payment.createdAt.toISOString(),
-      },
-      auth.userId
+        logger.info("Payment created", { id: payment.id, amount: payment.amount });
+
+        dispatchWebhookEventAsync(
+          WEBHOOK_EVENTS.PAYMENT_CREATED,
+          {
+            paymentId: payment.id,
+            amount: payment.amount,
+            assetCode: payment.assetCode,
+            status: payment.status,
+            createdAt: payment.createdAt.toISOString(),
+          },
+          auth.userId
+        );
+
+        incMetric("payments_created_total");
+
+        // Explicit cache invalidation (#741): a new payment changes the
+        // aggregate stats, this user's analytics, and the audit ledger
+        // (recording a payment appends an on-chain audit entry). Analytics is
+        // invalidated per-user so one tenant's write never flushes everyone
+        // else's cached aggregates.
+        await invalidateCaches([
+          { scope: "stats" },
+          { scope: "analytics", subject: auth.userId },
+          { scope: "audit-log" },
+        ]);
+
+        return successResponse(payment, undefined, 201);
+      }
     );
-
-    incMetric("payments_created_total");
-
-    // Explicit cache invalidation (#741): a new payment changes the aggregate
-    // stats, this user's analytics, and the audit ledger (recording a payment
-    // appends an on-chain audit entry). Analytics is invalidated per-user so
-    // one tenant's write never flushes everyone else's cached aggregates.
-    await invalidateCaches([
-      { scope: "stats" },
-      { scope: "analytics", subject: auth.userId },
-      { scope: "audit-log" },
-    ]);
-
-    return successResponse(payment, undefined, 201);
   } catch (err) {
     return problemFromError(err, instance);
   }
