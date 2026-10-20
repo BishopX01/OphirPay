@@ -74,6 +74,7 @@
     "test:load:concurrency": "node tests/load/payments-concurrency.js",
     "test:load:concurrency:json": "node tests/load/payments-concurrency.js --json",
     "test:load:concurrency:gate": "node tests/load/payments-concurrency.js --json=tests/load/results/payments-concurrency.json && node scripts/check-load-baselines.mjs tests/load/results/payments-concurrency.json",
+    "test:e2e:offline": "E2E_OFFLINE=1 playwright test --grep @offline",
     "test:visual": "playwright test -c playwright.visual.config.ts",
     "test:visual:update": "playwright test -c playwright.visual.config.ts --update-snapshots",
     "test:a11y": "playwright test e2e/accessibility.spec.ts",

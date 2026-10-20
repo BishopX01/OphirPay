@@ -3,6 +3,7 @@ import { withMetrics } from "@/lib/metrics-middleware";
 
 import { successResponse, handleApiError, badRequestError, unauthorizedError } from "@/lib/api-response";
 import { getAuthContext } from "@/lib/auth-session";
+import { requireScope } from "@/lib/api-route";
 import { verifyCsrf } from "@/lib/csrf";
 import { simulateContractCall, DEFAULT_CONTRACT_ID, CHAIN_READ_SOURCE } from "@/lib/contracts";
 import { nativeToScVal } from "@stellar/stellar-sdk";
@@ -57,6 +58,10 @@ export const POST = withMetrics("POST /api/escrows", withRequestLogging(async fu
     if (!auth) {
       return unauthorizedError("Authentication required. Connect your wallet or provide an API key.");
     }
+
+    // Creating escrow parameters is a state-changing delegated action.
+    const scopeError = await requireScope(request, "escrow:write", auth);
+    if (scopeError) return scopeError;
 
     const body = await request.json().catch(() => ({}));
     const { depositor, beneficiary, amount, asset, deadline, metadata } = body;

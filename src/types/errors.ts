@@ -323,6 +323,7 @@ export enum PaymentError {
   InvalidThreshold = 314,
   EmptySignersList = 315,
   DisputeCoolingOffActive = 316,
+  SpendingLimitExceeded = 317,
 }
 
 export const PAYMENT_ERROR_NAMES: Record<number, string> = {
@@ -642,6 +643,7 @@ export const PAYMENT_ERROR_NAMES: Record<number, string> = {
   314: "InvalidThreshold",
   315: "EmptySignersList",
   316: "DisputeCoolingOffActive",
+  317: "SpendingLimitExceeded",
 };
 
 export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
@@ -961,6 +963,7 @@ export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
   "InvalidThreshold": 314,
   "EmptySignersList": 315,
   "DisputeCoolingOffActive": 316,
+  "SpendingLimitExceeded": 317,
 };
 
 export const ERROR_MESSAGES: Record<number, string> = {
@@ -1280,4 +1283,5 @@ export const ERROR_MESSAGES: Record<number, string> = {
   314: "Threshold cannot be zero or exceed signer count",
   315: "Signers list cannot be empty",
   316: "Dispute cooling-off period is still active",
+  317: "Requested spend exceeds the remaining daily/monthly limit",
 };

@@ -325,6 +325,7 @@ export const CONTRACT_ERROR_MAP: Record<string, string> = {
   "314": "Threshold cannot be zero or exceed signer count",
   "315": "Signers list cannot be empty",
   "316": "Dispute cooling-off period is still active",
+  "317": "Requested spend exceeds the remaining daily/monthly limit",
 };
 
 /**

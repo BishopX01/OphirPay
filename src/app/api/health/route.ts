@@ -59,8 +59,56 @@ async function pingJsonRpc(
   }
 }
 
-export const GET = withMetrics("GET /api/health", withRequestLogging(async function GET() {
+export const GET = withMetrics("GET /api/health", withRequestLogging(async function GET(request: Request) {
   try {
+    // ── Lightweight RPC-only probe (`?probe=rpc`) ──────────────
+    // The UI polls this every few seconds to drive the network status banner.
+    // It must not touch the database, Horizon or Redis on every client tick:
+    // only the Soroban RPC reachability and the in-process failover snapshot
+    // are needed to tell the user which provider is active and how slow it is.
+    if (new URL(request.url).searchParams.get("probe") === "rpc") {
+      const rpc = await pingJsonRpc(
+        SOROBAN_RPC_URL,
+        { jsonrpc: "2.0", id: 1, method: "getHealth" },
+        5000
+      );
+      const failover = getRpcFailoverState();
+      const rpcStatus: CheckStatus = rpc?.ok ? "ok" : "error";
+
+      return successResponse(
+        {
+          status: rpcStatus === "ok" ? "ok" : "degraded",
+          services: {
+            stellar: {
+              network: STELLAR_NETWORK,
+              rpcUrl: SOROBAN_RPC_URL,
+              rpc: { status: rpcStatus, latencyMs: rpc?.latencyMs ?? null },
+            },
+          },
+          rpcFailover: {
+            activeEndpoint: failover.activeEndpoint,
+            primaryEndpoint: failover.primaryEndpoint,
+            activeProviderName: failover.activeProviderName,
+            primaryProviderName: failover.primaryProviderName,
+            usingFallback: failover.usingFallback,
+            failoverCount: failover.failoverCount,
+            recoveryCount: failover.recoveryCount,
+            currentFallbackDurationMs: failover.currentFallbackDurationMs,
+            longestFallbackDurationMs: failover.longestFallbackDurationMs,
+            lastTransitionAt: failover.lastTransitionAt,
+            degradedAfterMs: RPC_FAILOVER_DEGRADED_AFTER_MS,
+            degraded: isRpcFailoverDegraded(),
+            lastFailureReasons: failover.lastFailureReasons,
+          },
+        },
+        { timestamp: new Date().toISOString() },
+        // A degraded upstream RPC is reported in the body, not as a 5xx: the
+        // app itself is healthy and the client wants the latency/provider
+        // details in the same shape either way.
+        200
+      );
+    }
+
     // Critical check: database connectivity
     let dbStatus: "ok" | "error" = "ok";
     let dbLatency: number | null = null;
@@ -164,6 +212,8 @@ export const GET = withMetrics("GET /api/health", withRequestLogging(async funct
         rpcFailover: {
           activeEndpoint: failover.activeEndpoint,
           primaryEndpoint: failover.primaryEndpoint,
+          activeProviderName: failover.activeProviderName,
+          primaryProviderName: failover.primaryProviderName,
           usingFallback: failover.usingFallback,
           failoverCount: failover.failoverCount,
           recoveryCount: failover.recoveryCount,
