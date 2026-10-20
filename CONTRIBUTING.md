@@ -116,6 +116,34 @@ ecosystems once a week.
   breaking changes or fails CI, coordinate with the team before merging instead
   of force-landing it.
 
+#### Batch mode: update PRs target `integration/staging`
+
+While `integration/staging` exists, every `updates` entry in
+[`.github/dependabot.yml`](.github/dependabot.yml) sets
+`target-branch: "integration/staging"`. Dependabot opens version **and**
+security update PRs against that branch, so they pass
+`enforce-integration-branch.yml`. A Dependabot PR based on `main` is rejected by
+that guard and can never merge while batch mode is active.
+
+**Switching back when batch mode ends.** Once the promotion PR is merged into
+`main` and `integration/staging` is deleted:
+
+1. Remove the `target-branch: "integration/staging"` line from **all four**
+   `updates` entries in `.github/dependabot.yml` (npm, both Cargo entries, and
+   `github-actions`). Omitting the field restores the repository default branch
+   (`main`); `target-branch: "main"` is equivalent.
+2. Update this section (and the batch-mode notes in
+   [`docs/MERGE_GATE.md`](docs/MERGE_GATE.md)) so the docs no longer describe
+   the integration branch as live.
+3. Retarget outstanding update PRs. Dependabot applies `target-branch` only
+   when it **opens** a PR, so PRs created before the config change keep their
+   old base: comment `@dependabot recreate` on each (or close and reopen it) to
+   get a fresh PR against `main`.
+
+> The reverse also holds: when batch mode starts, update PRs opened before
+> `target-branch` was added stay based on `main` until they are recreated. Let
+> one finish its run, then comment `@dependabot recreate` to retarget it.
+
 ### Issue triage & stale policy
 
 The [stale workflow](.github/workflows/stale.yml) runs every Monday and closes
