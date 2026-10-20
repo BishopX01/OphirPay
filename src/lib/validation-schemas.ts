@@ -131,10 +131,22 @@ const paymentStatusValues = [
 /** Status filter accepted by the payment CSV export endpoint. */
 export const paymentStatusSchema = z.enum(paymentStatusValues);
 
-/** Query params for GET /api/payments/export — same filters as the list route. */
+/** Calendar date accepted by the export range filters (`YYYY-MM-DD`). */
+const exportDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must use YYYY-MM-DD")
+  .refine((value) => !Number.isNaN(new Date(`${value}T00:00:00.000Z`).getTime()), {
+    message: "Date is not a valid calendar date",
+  });
+
+/** Query params for GET /api/payments/export — CSV or JSON, filter-aware. */
 export const paymentExportParamsSchema = z.object({
   status: paymentStatusSchema.optional(),
   search: z.string().optional(),
+  dateFrom: exportDateSchema.optional(),
+  dateTo: exportDateSchema.optional(),
+  asset: z.string().trim().min(1).max(12).optional(),
+  format: z.enum(["csv", "json"]).default("csv"),
 });
 
 // ── Batch Schemas ─────────────────────────────────────────────

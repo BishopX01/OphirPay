@@ -16,6 +16,7 @@ import {
   API_SCOPES,
   ADMIN_SCOPE,
   hasScope,
+  missingScopes,
   type ApiScope,
 } from "@/lib/api-scopes";
 
@@ -23,6 +24,7 @@ export {
   API_SCOPES,
   ADMIN_SCOPE,
   hasScope,
+  missingScopes,
   type ApiScope,
 };
 

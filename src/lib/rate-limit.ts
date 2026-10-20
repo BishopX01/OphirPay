@@ -356,6 +356,19 @@ export const CSP_REPORT_RATE_LIMIT_WINDOW_MS = 60_000;
 /** Maximum CSP violation reports allowed per client per minute (#1392). */
 export const CSP_REPORT_RATE_LIMIT_MAX = 60;
 
+/**
+ * Payment export quota (per authenticated account).
+ *
+ * An export walks every matching payment in 250-row pages, so a retry loop or
+ * a script can generate sustained database load far beyond a normal page
+ * view. The limit is deliberately per-user (not per-IP) because API-key
+ * clients share a single account and must share one bucket.
+ */
+export const PAYMENT_EXPORT_RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Maximum payment exports allowed per account per window. */
+export const PAYMENT_EXPORT_RATE_LIMIT_MAX = 20;
+
 // ── API key lifecycle quotas (#1370) ───────────────────────────
 //
 // Creating and rotating API keys are privileged, low-frequency operations.
