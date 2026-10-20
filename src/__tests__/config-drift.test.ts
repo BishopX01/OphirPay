@@ -113,6 +113,15 @@ describe("Vercel rewrites (vercel.json) — #682", () => {
     expect(read(".well-known/security.txt")).toMatch(/^Contact:/m);
   });
 
+  it("security.txt and the serving route expose working private channels (#1280)", () => {
+    const file = read(".well-known/security.txt");
+    expect(file).toContain("https://github.com/OphirPay/OphirPay/security/advisories/new");
+    // Neither domain accepts security mail yet (.com has no MX, .dev does not
+    // resolve), so no mailto contact may be advertised.
+    expect(file).not.toMatch(/^Contact: *mailto:/m);
+    expect(exists("src/app/.well-known/security.txt/route.ts")).toBe(true);
+  });
+
   it("serves stellar.toml from environment-backed network and contract configuration", () => {
     const route = read("src/app/.well-known/stellar.toml/route.ts");
     expect(route).toContain("NETWORK_PASSPHRASE");
