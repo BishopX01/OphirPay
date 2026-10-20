@@ -398,20 +398,22 @@ paths:
   /api/payments/export:
     get:
       tags: [Payments]
-      summary: Export payments as CSV
+      summary: Export payments as CSV or JSON
       description: |
-        Server-side CSV export of the CURRENT filter results — every row
-        matching `status` / `search` (the same filters as GET /api/payments),
-        not just the page loaded in the browser. Returns a dated CSV
-        attachment that includes all key fields plus memo and transaction hash.
+        Server-side export of the CURRENT filter results — every row matching
+        `status` / `search` / `dateFrom` / `dateTo` / `asset`, not just the page
+        loaded in the browser. Returns a dated attachment in `format=csv`
+        (default) or `format=json` with timestamp, transaction hash, sender,
+        recipient, asset, amount, fee, memo and status.
 
-        The response is **streamed**: the CSV header is sent immediately, then
+        The response is **streamed**: the header is sent immediately, then
         rows are flushed in 250-row chunks as they are pulled from the database
         with a Prisma cursor (`Transfer-Encoding: chunked`). Memory use is flat
         regardless of how many rows match, and there is no row cap — the export
         never silently omits rows. If the database fails after the headers are
         sent, the stream is errored so the download fails instead of producing
-        a truncated file that looks complete.
+        a truncated file that looks complete. Exports are rate-limited per
+        authenticated account; a 429 carries `Retry-After`.
       security: [{ ApiKeyAuth: [] }, { BearerAuth: [] }]
       parameters:
         - name: status
@@ -426,23 +428,64 @@ paths:
           schema:
             type: string
           description: Only export payments matching this search term
+        - name: dateFrom
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Inclusive UTC start date (`YYYY-MM-DD`)
+        - name: dateTo
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Inclusive UTC end date (`YYYY-MM-DD`)
+        - name: asset
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Only export payments in this asset code
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+          description: Download format
       responses:
         "200":
           description: >-
-            Streamed CSV attachment with the matching payment rows
+            Streamed attachment with the matching payment rows
             (`Transfer-Encoding: chunked`).
           content:
             text/csv:
               schema:
                 type: string
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties:
+                    type: string
         "400":
-          description: RFC 7807 problem details — an unknown `status` filter.
+          description: RFC 7807 problem details — an unknown filter or format.
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
         "401":
           description: RFC 7807 problem details — no authenticated caller.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "429":
+          description: RFC 7807 problem details — the per-account export quota is exhausted (`Retry-After` is set).
           content:
             application/problem+json:
               schema:

@@ -20,11 +20,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Prisma, type Payment } from "@prisma/client";
 
-const { mockFindMany, mockGetAuthContext, mockLoggerError } = vi.hoisted(() => ({
-  mockFindMany: vi.fn(),
-  mockGetAuthContext: vi.fn(),
-  mockLoggerError: vi.fn(),
-}));
+const { mockFindMany, mockGetAuthContext, mockLoggerError, mockRateIncrement } =
+  vi.hoisted(() => ({
+    mockFindMany: vi.fn(),
+    mockGetAuthContext: vi.fn(),
+    mockLoggerError: vi.fn(),
+    mockRateIncrement: vi.fn(),
+  }));
 
 vi.mock("@/lib/prisma", () => ({
   default: { payment: { findMany: mockFindMany } },
@@ -46,6 +48,19 @@ vi.mock("@/lib/logger", () => ({
   },
 }));
 
+// Keep the export quota deterministic: the route must call the shared store,
+// but the tests must not share a counter with each other.
+vi.mock("@/lib/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/rate-limit")>();
+  return {
+    ...actual,
+    getRateLimitStore: () => ({
+      increment: mockRateIncrement,
+      reset: vi.fn(),
+    }),
+  };
+});
+
 import { GET } from "@/app/api/payments/export/route";
 import {
   PAYMENT_EXPORT_COLUMNS,
@@ -65,8 +80,10 @@ function makePayment(overrides: Partial<Payment> = {}): Payment {
     transactionHash:
       "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
     stellarOpId: null,
-    sourceAccountId: null,
-    destAccountId: null,
+    sourceAccountId:
+      "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+    destAccountId:
+      "GBH3O5IHGJ6GUKZCINS3UZGHVKDKYDLVIRKZY7GYA27B54WT3Q7H4KXO",
     batchId: null,
     recurrenceId: null,
     metadata: null,
@@ -102,6 +119,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetAuthContext.mockResolvedValue({ userId: "user-1" });
   mockFindMany.mockResolvedValue([]);
+  mockRateIncrement.mockResolvedValue({
+    allowed: true,
+    remaining: 19,
+    resetAt: Date.now() + 60_000,
+  });
 });
 
 describe("GET /api/payments/export — streaming", () => {
@@ -297,5 +319,102 @@ describe("GET /api/payments/export — streaming", () => {
     // Header line + 501 data rows + the trailing empty segment after the final
     // newline.
     expect(text.split("\n")).toHaveLength(PAYMENT_EXPORT_PAGE_SIZE * 2 + 3);
+  });
+
+  it("streams valid JSON with the shared export fields", async () => {
+    mockFindMany.mockResolvedValueOnce([
+      makePayment({
+        metadata: '{"fee":"100"}',
+        memo: 'needs, "quoting"',
+      }),
+    ]);
+
+    const res = await exportRequest("?format=json");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe(
+      "application/json; charset=utf-8"
+    );
+    expect(res.headers.get("Content-Disposition")).toMatch(
+      /attachment; filename="ophirpay-payments-\d{4}-\d{2}-\d{2}\.json"/
+    );
+    expect(res.headers.get("X-Export-Format")).toBe("json");
+
+    const parsed = JSON.parse(await res.text()) as Record<string, string>[];
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      timestamp: "2026-08-26T10:00:00.000Z",
+      transactionHash:
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      sender: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      recipient: "GBH3O5IHGJ6GUKZCINS3UZGHVKDKYDLVIRKZY7GYA27B54WT3Q7H4KXO",
+      asset: "XLM",
+      amount: "100.2500000",
+      fee: "100",
+      memo: 'needs, "quoting"',
+      status: "COMPLETED",
+    });
+  });
+
+  it("emits a parseable empty JSON array when nothing matches", async () => {
+    const res = await exportRequest("?format=json");
+    expect(JSON.parse(await res.text())).toEqual([]);
+  });
+
+  it("forwards the date range and asset filters to the shared where builder", async () => {
+    const res = await exportRequest(
+      "?format=json&dateFrom=2026-01-01&dateTo=2026-01-31&asset=USDC"
+    );
+    await res.text();
+
+    const call = mockFindMany.mock.calls[0][0];
+    expect(call.where).toMatchObject({
+      userId: "user-1",
+      assetCode: "USDC",
+      createdAt: {
+        gte: new Date("2026-01-01T00:00:00.000Z"),
+        lte: new Date("2026-01-31T23:59:59.999Z"),
+      },
+    });
+  });
+
+  it("rejects an invalid format or date with a 400 problem document", async () => {
+    for (const query of ["?format=xml", "?dateFrom=2026-13-40"]) {
+      const res = await exportRequest(query);
+      expect(res.status).toBe(400);
+      expect(res.headers.get("Content-Type")).toBe(
+        "application/problem+json"
+      );
+    }
+    expect(mockFindMany).not.toHaveBeenCalled();
+  });
+
+  it("enforces the per-account export quota with a 429 and Retry-After", async () => {
+    mockRateIncrement.mockResolvedValueOnce({
+      allowed: false,
+      remaining: 0,
+      resetAt: Date.now() + 30_000,
+    });
+
+    const res = await exportRequest();
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Content-Type")).toBe("application/problem+json");
+    expect(Number(res.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect(mockRateIncrement).toHaveBeenCalledWith(
+      "payments:export:user-1",
+      expect.any(Number),
+      expect.any(Number)
+    );
+    expect(mockFindMany).not.toHaveBeenCalled();
+  });
+
+  it("charges the quota only after authentication", async () => {
+    mockGetAuthContext.mockResolvedValue(null);
+
+    const res = await exportRequest();
+
+    expect(res.status).toBe(401);
+    expect(mockRateIncrement).not.toHaveBeenCalled();
   });
 });

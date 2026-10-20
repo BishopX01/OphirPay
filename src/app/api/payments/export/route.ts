@@ -6,6 +6,7 @@ import { paymentExportParamsSchema } from "@/lib/validation-schemas";
 import {
   problemFromError,
   problemFromZodError,
+  problemTooManyRequests,
   problemUnauthorized,
 } from "@/lib/api-errors";
 import { logger } from "@/lib/logger";
@@ -13,42 +14,53 @@ import { getAuthContext } from "@/lib/auth-session";
 import { buildPaymentWhere } from "@/lib/payment-filters";
 import {
   PAYMENT_EXPORT_COLUMNS,
+  PAYMENT_EXPORT_CONTENT_TYPES,
   PAYMENT_EXPORT_PAGE_SIZE,
-  paymentToCsvRow,
   buildPaymentExportFilename,
+  paymentRowToJson,
+  paymentToExportRow,
 } from "@/lib/payment-export";
 import { buildCsvHeader, buildCsvRow } from "@/lib/export-csv";
+import {
+  PAYMENT_EXPORT_RATE_LIMIT_MAX,
+  PAYMENT_EXPORT_RATE_LIMIT_WINDOW_MS,
+  getRateLimitStore,
+  getRetryAfterSeconds,
+} from "@/lib/rate-limit";
 
 /**
  * GET /api/payments/export
  *
- * Streaming CSV export of the CURRENT filter results — every row matching
- * `status` / `search` (the same filters as GET /api/payments), not just the
- * page loaded in the browser.
+ * Streaming export of the CURRENT filter results — every row matching the
+ * active `status` / `search` / `dateFrom` / `dateTo` / `asset` filters, not
+ * just the page loaded in the browser.
  *
- * The export used to `findMany()` every matching row, map it to a row object
- * and join the lot into one string. For an account with a few thousand
- * transactions that meant the whole result set existed in memory (twice: once
- * as Prisma objects, once as the CSV string) and the client saw nothing until
- * the last row had been serialized — the failure mode was a memory spike or a
- * timeout, with no partial data to show for it (issue #1369).
+ * Two formats share one record shape (`src/lib/payment-export.ts`):
  *
- * It now streams: a Prisma cursor walks the result set in 250-row pages, and
- * each page is serialized and flushed as its own chunk. Peak memory is one page
- * plus the runtime's socket buffer, independent of the number of rows, and the
- * first rows reach the client almost immediately.
+ *   • `format=csv`  (default) — RFC 4180 rows with the injection guard from
+ *     `src/lib/export-csv.ts`.
+ *   • `format=json` — an array of objects with the same field names.
+ *
+ * The export streams: a Prisma cursor walks the result set in 250-row pages,
+ * and each page is serialized and flushed as its own chunk. Peak memory is one
+ * page plus the runtime's socket buffer, independent of the number of rows,
+ * and the first rows reach the client almost immediately (issue #1369).
  *
  * Streaming has two consequences this handler has to handle explicitly,
  * because the 200 and the headers are already on the wire when they happen:
  *
  *   • **Database error mid-stream** — the stream is *errored*, not closed. A
- *     closed stream produces a CSV that looks complete but stops mid-file; an
- *     errored stream fails the client's download, which is the only signal
- *     still available once the status line is sent. The failure is also logged,
- *     since the response status no longer reflects it.
+ *     closed stream produces a CSV/JSON file that looks complete but stops
+ *     mid-file; an errored stream fails the client's download, which is the
+ *     only signal still available once the status line is sent. The failure is
+ *     also logged, since the response status no longer reflects it.
  *   • **Client disconnect** — the page iterator is returned (released) so its
  *     `finally` blocks run and the in-flight page request is not followed by
  *     more, instead of continuing to read for a response nobody is waiting for.
+ *
+ * Exports are quota-limited per authenticated account: each request can walk
+ * the entire payment history, so a retry loop is far more expensive than it
+ * looks. The quota never replaces authentication, it only bounds abuse.
  */
 export async function GET(request: Request) {
   const instance = new URL(request.url).pathname;
@@ -64,12 +76,44 @@ export async function GET(request: Request) {
       // .optional() rejects — normalize to undefined first.
       status: searchParams.get("status") ?? undefined,
       search: searchParams.get("search") ?? undefined,
+      dateFrom: searchParams.get("dateFrom") ?? undefined,
+      dateTo: searchParams.get("dateTo") ?? undefined,
+      asset: searchParams.get("asset") ?? undefined,
+      format: searchParams.get("format") ?? undefined,
     });
     if (!parsed.success) return problemFromZodError(parsed.error, { instance });
 
-    const { status, search } = parsed.data;
-    const where = buildPaymentWhere(auth.userId, { status, search });
+    const { status, search, dateFrom, dateTo, asset, format } = parsed.data;
+
+    // ── Per-account quota ──────────────────────────────────────────
+    const rate = await getRateLimitStore().increment(
+      `payments:export:${auth.userId}`,
+      PAYMENT_EXPORT_RATE_LIMIT_WINDOW_MS,
+      PAYMENT_EXPORT_RATE_LIMIT_MAX
+    );
+    if (!rate.allowed) {
+      return problemTooManyRequests(
+        "Payment export rate limit exceeded. Try again when the window resets.",
+        {
+          instance,
+          headers: {
+            "Retry-After": String(getRetryAfterSeconds(rate)),
+            "X-RateLimit-Limit": String(PAYMENT_EXPORT_RATE_LIMIT_MAX),
+            "X-RateLimit-Remaining": "0",
+          },
+        }
+      );
+    }
+
+    const where = buildPaymentWhere(auth.userId, {
+      status,
+      search,
+      dateFrom,
+      dateTo,
+      asset,
+    });
     const encoder = new TextEncoder();
+    const isJson = format === "json";
 
     // Drive the page iterator by hand rather than with `for await` so a client
     // disconnect can release it (`return()` runs its `finally` blocks).
@@ -87,6 +131,7 @@ export async function GET(request: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         let settled = false;
+        let wroteJsonRow = false;
         // The consumer may already be gone (client disconnect) by the time we
         // settle, in which case close()/error() throw — that is not our error.
         const settle = (action: () => void) => {
@@ -101,9 +146,13 @@ export async function GET(request: Request) {
 
         // Header first, so a client can start parsing before the first page
         // has even been read from the database.
-        controller.enqueue(
-          encoder.encode(buildCsvHeader(PAYMENT_EXPORT_COLUMNS) + "\n")
-        );
+        if (isJson) {
+          controller.enqueue(encoder.encode("["));
+        } else {
+          controller.enqueue(
+            encoder.encode(buildCsvHeader(PAYMENT_EXPORT_COLUMNS) + "\n")
+          );
+        }
 
         try {
           for (;;) {
@@ -114,12 +163,32 @@ export async function GET(request: Request) {
 
             // One chunk per page: far fewer (and smaller) chunk frames than
             // one per row, while still bounding the buffer to a page.
-            const rows = next.value
-              .map((payment) =>
-                buildCsvRow(paymentToCsvRow(payment), PAYMENT_EXPORT_COLUMNS)
-              )
-              .join("\n");
-            controller.enqueue(encoder.encode(rows + "\n"));
+            const rows = next.value.map((payment) => {
+              const row = paymentToExportRow(payment);
+              return isJson
+                ? JSON.stringify(paymentRowToJson(row))
+                : buildCsvRow(row, PAYMENT_EXPORT_COLUMNS);
+            });
+            if (rows.length === 0) continue;
+
+            if (isJson) {
+              controller.enqueue(
+                encoder.encode(
+                  (wroteJsonRow ? ",\n" : "\n") + rows.join(",\n")
+                )
+              );
+              wroteJsonRow = true;
+            } else {
+              controller.enqueue(encoder.encode(rows.join("\n") + "\n"));
+            }
+          }
+
+          if (isJson) {
+            // The opening `[` was already flushed; close it. Empty exports
+            // therefore become `[]` rather than an unterminated `[`.
+            controller.enqueue(
+              encoder.encode(wroteJsonRow ? "\n]\n" : "]\n")
+            );
           }
           settle(() => controller.close());
         } catch (error) {
@@ -133,6 +202,7 @@ export async function GET(request: Request) {
             error instanceof Error ? error : new Error(String(error));
           logger.error("Payment export failed mid-stream", {
             reason: failure.message,
+            format,
           });
           settle(() => controller.error(failure));
         } finally {
@@ -150,10 +220,14 @@ export async function GET(request: Request) {
 
     return new Response(stream, {
       headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${buildPaymentExportFilename()}"`,
+        "Content-Type": PAYMENT_EXPORT_CONTENT_TYPES[format],
+        "Content-Disposition": `attachment; filename="${buildPaymentExportFilename(format)}"`,
         // The dataset is filtered per caller and can change between requests.
         "Cache-Control": "no-store",
+        "X-Export-Format": format,
+        "X-RateLimit-Limit": String(PAYMENT_EXPORT_RATE_LIMIT_MAX),
+        "X-RateLimit-Remaining": String(rate.remaining),
+        "X-RateLimit-Reset": String(Math.ceil(rate.resetAt / 1000)),
         // The body is sent as it is produced. Node's HTTP/1.1 server would add
         // this itself for a streamed body; declaring it keeps the intention
         // explicit (HTTP/2 framing ignores it).

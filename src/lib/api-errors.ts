@@ -233,6 +233,26 @@ export function problemConflict(
 }
 
 /**
+ * 429 for a caller that exhausted a route-level quota.
+ *
+ * `Retry-After` is supplied by the caller (from `getRetryAfterSeconds`) so the
+ * response tells the client when the window resets instead of only that it
+ * was throttled.
+ */
+export function problemTooManyRequests(
+  detail: string,
+  options: { instance?: string; code?: string; headers?: Record<string, string> } = {}
+): NextResponse {
+  return formatProblemDetails({
+    status: 429,
+    code: options.code ?? "RATE_LIMITED",
+    detail,
+    instance: options.instance,
+    headers: options.headers,
+  });
+}
+
+/**
  * Map any caught error to a problem-details response.
  *
  * Uses the same classifier as the legacy handler, so the two formats cannot
