@@ -12,7 +12,15 @@ import { useApiQuery } from "@/hooks/useApiQuery";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useTableKeyboardNavigation } from "@/hooks/useTableKeyboardNavigation";
 import { PAGE_TITLES } from "@/lib/page-titles";
-import { createEscrow, claimEscrow, getContractOwner, releaseEscrow, releaseEscrowByArbiter } from "@/lib/contract-advanced";
+import {
+  createEscrow,
+  claimEscrow,
+  getContractOwner,
+  raiseEscrowDispute,
+  releaseEscrow,
+  releaseEscrowByArbiter,
+  resolveEscrowDispute,
+} from "@/lib/contract-advanced";
 import { fetchRecentContractRecords } from "@/lib/on-chain-records";
 import { formatXlmStroops, parseXlmAmount } from "@/lib/stellar-amount";
 import type { EscrowData } from "@/types/contract-abi";
@@ -128,6 +136,24 @@ export default function EscrowsPage() {
     return submit(() => releaseEscrow(wallet.publicKey!, id), `Escrow ${id} released`);
   };
 
+  const handleRaiseDispute = (id: number) => {
+    if (!wallet.publicKey) return;
+    return submit(
+      () => raiseEscrowDispute(wallet.publicKey!, id),
+      `Dispute opened for escrow ${id}`,
+    );
+  };
+
+  const handleResolveDispute = (id: number, releaseToBeneficiary: boolean) => {
+    if (!wallet.publicKey) return;
+    return submit(
+      () => resolveEscrowDispute(wallet.publicKey!, id, releaseToBeneficiary),
+      releaseToBeneficiary
+        ? `Escrow ${id} resolved for the seller`
+        : `Escrow ${id} refunded to the buyer`,
+    );
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -172,8 +198,10 @@ export default function EscrowsPage() {
           {escrows.map((escrow, index) => {
             const id = Number(escrow.id);
             const isSettled = escrow.released || escrow.claimed;
+            const isDisputed = Number(escrow.dispute_initiated_at ?? 0) > 0;
             const deadlineReached = Math.floor(Date.now() / 1000) >= Number(escrow.deadline);
             const isBeneficiary = wallet.publicKey === escrow.beneficiary;
+            const isDepositor = wallet.publicKey === escrow.depositor;
             const isArbiter = Boolean(escrow.arbiter && wallet.publicKey === escrow.arbiter);
             return (
               <div
@@ -189,11 +217,27 @@ export default function EscrowsPage() {
               <Card className="space-y-3 p-4">
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-semibold text-gray-900 dark:text-white">Escrow #{id}</h2>
-                  <Badge variant={isSettled ? "success" : "info"}>{isSettled ? "Settled" : "Locked"}</Badge>
+                  <Badge variant={isSettled ? "success" : isDisputed ? "warning" : "info"}>
+                    {isSettled ? "Settled" : isDisputed ? "Disputed" : "Locked"}
+                  </Badge>
                   <span className="ml-auto text-lg font-semibold text-gray-900 dark:text-white">
                     {formatXlmStroops(escrow.amount)}
                   </span>
                 </div>
+                {isDisputed && !isSettled && (
+                  <div
+                    data-testid="dispute-banner"
+                    role="status"
+                    aria-live="polite"
+                    className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200"
+                  >
+                    <p className="font-semibold">Dispute in progress</p>
+                    <p className="mt-1">
+                      Funds are held until the designated arbiter resolves this escrow.
+                      Claim, owner release, and early arbiter release are disabled.
+                    </p>
+                  </div>
+                )}
                 <dl className="grid gap-2 text-sm text-gray-600 dark:text-gray-400 sm:grid-cols-2">
                   <div><dt className="inline font-medium">Depositor: </dt><dd className="inline font-mono">{shortenAddress(escrow.depositor, 12)}</dd></div>
                   <div><dt className="inline font-medium">Beneficiary: </dt><dd className="inline font-mono">{shortenAddress(escrow.beneficiary, 12)}</dd></div>
@@ -203,19 +247,66 @@ export default function EscrowsPage() {
                 {escrow.metadata && <p className="text-sm text-gray-500">{escrow.metadata}</p>}
                 {!isSettled && wallet.connected && (
                   <div className="flex flex-wrap gap-2">
-                    {isBeneficiary && deadlineReached && (
-                      <Button size="sm" onClick={() => void handleClaim(id)} loading={submitting}>Claim escrow</Button>
+                    {isDisputed && isArbiter && (
+                      <>
+                        <Button
+                          data-testid="resolve-to-buyer"
+                          size="sm"
+                          variant="danger"
+                          onClick={() => void handleResolveDispute(id, false)}
+                          loading={submitting}
+                        >
+                          Resolve for buyer
+                        </Button>
+                        <Button
+                          data-testid="resolve-to-seller"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void handleResolveDispute(id, true)}
+                          loading={submitting}
+                        >
+                          Resolve for seller
+                        </Button>
+                      </>
                     )}
-                    {isArbiter && (
+                    {isBeneficiary && deadlineReached && (
+                      <Button
+                        size="sm"
+                        disabled={isDisputed}
+                        onClick={() => void handleClaim(id)}
+                        loading={submitting}
+                      >
+                        Claim escrow
+                      </Button>
+                    )}
+                    {!isDisputed && isArbiter && (
                       <>
                         <Button size="sm" onClick={() => void handleArbiterRelease(id, true)} loading={submitting}>Release to beneficiary</Button>
                         <Button size="sm" variant="secondary" onClick={() => void handleArbiterRelease(id, false)} loading={submitting}>Return to depositor</Button>
                       </>
                     )}
                     {wallet.publicKey === contractOwner && (
-                      <Button size="sm" onClick={() => void handleOwnerRelease(id)} loading={submitting}>Owner release</Button>
+                      <Button
+                        size="sm"
+                        disabled={isDisputed}
+                        onClick={() => void handleOwnerRelease(id)}
+                        loading={submitting}
+                      >
+                        Owner release
+                      </Button>
                     )}
-                    {isBeneficiary && !deadlineReached && (
+                    {!isDisputed && (isDepositor || isBeneficiary) && escrow.arbiter && (
+                      <Button
+                        data-testid="raise-dispute"
+                        size="sm"
+                        variant="danger"
+                        onClick={() => void handleRaiseDispute(id)}
+                        loading={submitting}
+                      >
+                        Raise dispute
+                      </Button>
+                    )}
+                    {!isDisputed && isBeneficiary && !deadlineReached && (
                       <span className="self-center text-xs text-gray-500">Claim becomes available after the deadline.</span>
                     )}
                   </div>

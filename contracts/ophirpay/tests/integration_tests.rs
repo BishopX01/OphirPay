@@ -2,8 +2,8 @@
 #![cfg(test)]
 
 use ophirpay_contract::{
-    BatchCreateResult, OphirPayContract, OphirPayContractClient, Payment, PaymentError,
-    RefundReasonCode, RefundStatus,
+    AssetFeeTotal, BatchCreateResult, MultiAssetPayment, OphirPayContract, OphirPayContractClient,
+    Payment, PaymentError, RefundReasonCode, RefundStatus,
 };
 use ophirpay_emitter::{EmitterError, PaymentEventEmitter, PaymentEventEmitterClient};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
@@ -63,6 +63,17 @@ impl<'a> TestFixture<'a> {
     pub fn mint(&self, to: &Address, amount: i128) {
         self.token_admin_client.mint(to, &amount);
     }
+}
+
+/// Read a per-asset fee from a `MultiAssetBatchResult` vector.
+fn fee_for(fees: &Vec<AssetFeeTotal>, asset: &Address) -> i128 {
+    for index in 0..fees.len() {
+        let entry = fees.get(index).unwrap();
+        if entry.asset == *asset {
+            return entry.fee;
+        }
+    }
+    0
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -368,6 +379,232 @@ fn test_batch_empty_and_overflow_errors() {
         fix.client
             .try_create_batch(&creator, &payees, &zero_amounts, &fix.token_id, &tx_hash);
     assert!(res.is_err());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2b. MULTI-ASSET BATCH PAYMENTS (#1403)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_multi_asset_batch_settles_three_tokens_and_accounts_fees() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let fee_collector = Address::generate(&fix.env);
+
+    // Three distinct SAC token contracts: XLM (from the fixture), USDC, EURC.
+    let usdc_admin = Address::generate(&fix.env);
+    let usdc_id = fix.env.register_stellar_asset_contract(usdc_admin.clone());
+    let usdc_admin_client = token::StellarAssetClient::new(&fix.env, &usdc_id);
+    let usdc_client = token::Client::new(&fix.env, &usdc_id);
+
+    let eurc_admin = Address::generate(&fix.env);
+    let eurc_id = fix.env.register_stellar_asset_contract(eurc_admin.clone());
+    let eurc_admin_client = token::StellarAssetClient::new(&fix.env, &eurc_id);
+    let eurc_client = token::Client::new(&fix.env, &eurc_id);
+
+    let xlm_client = token::Client::new(&fix.env, &fix.token_id);
+
+    // Fund the payer. The collector starts empty: SAC transfers create the
+    // recipient balance, which is exactly what a fresh fee collector looks like.
+    let creator_xlm_initial = 100_000_000i128;
+    let creator_usdc_initial = 100_000_000i128;
+    let creator_eurc_initial = 100_000_000i128;
+    fix.mint(&creator, creator_xlm_initial);
+    usdc_admin_client.mint(&creator, &creator_usdc_initial);
+    eurc_admin_client.mint(&creator, &creator_eurc_initial);
+
+    // 1% payment fee, collected per asset.
+    fix.client
+        .set_fee_config(&fix.owner, &100u32, &0u32, &0u32, &0i128, &0i128, &true);
+    fix.client.set_fee_collector(&fix.owner, &fee_collector);
+
+    let alice = Address::generate(&fix.env);
+    let bob = Address::generate(&fix.env);
+    let carol = Address::generate(&fix.env);
+
+    let mut legs = Vec::new(&fix.env);
+    legs.push_back(MultiAssetPayment {
+        payee: alice.clone(),
+        amount: 1_000_000i128,
+        asset: fix.token_id.clone(),
+    });
+    legs.push_back(MultiAssetPayment {
+        payee: bob.clone(),
+        amount: 500_000i128,
+        asset: fix.token_id.clone(),
+    });
+    legs.push_back(MultiAssetPayment {
+        payee: carol.clone(),
+        amount: 2_000_000i128,
+        asset: usdc_id.clone(),
+    });
+    legs.push_back(MultiAssetPayment {
+        payee: alice.clone(),
+        amount: 3_000_000i128,
+        asset: eurc_id.clone(),
+    });
+
+    let tx_hash = String::from_str(&fix.env, "multi_asset_batch_001");
+    let result = fix
+        .client
+        .execute_multi_asset_batch(&creator, &legs, &tx_hash);
+
+    assert_eq!(result.batch_id, 1);
+    assert_eq!(result.total_requests, 4);
+    assert_eq!(result.successful, 4);
+    assert_eq!(result.failed, 0);
+    assert_eq!(result.fees.len(), 3);
+
+    // Per-token fee totals: 1% of 1.5M XLM-stroops, 2M USDC, 3M EURC.
+    assert_eq!(fee_for(&result.fees, &fix.token_id), 15_000);
+    assert_eq!(fee_for(&result.fees, &usdc_id), 20_000);
+    assert_eq!(fee_for(&result.fees, &eurc_id), 30_000);
+
+    // Each recipient received exactly the requested asset and amount.
+    assert_eq!(xlm_client.balance(&alice), 1_000_000);
+    assert_eq!(xlm_client.balance(&bob), 500_000);
+    assert_eq!(usdc_client.balance(&carol), 2_000_000);
+    assert_eq!(eurc_client.balance(&alice), 3_000_000);
+
+    // Fees landed with the collector, per token, not in a cross-asset pool.
+    assert_eq!(xlm_client.balance(&fee_collector), 15_000);
+    assert_eq!(usdc_client.balance(&fee_collector), 20_000);
+    assert_eq!(eurc_client.balance(&fee_collector), 30_000);
+
+    // Payer paid principal + fee in each token.
+    assert_eq!(
+        xlm_client.balance(&creator),
+        creator_xlm_initial - 1_500_000 - 15_000
+    );
+    assert_eq!(
+        usdc_client.balance(&creator),
+        creator_usdc_initial - 2_000_000 - 20_000
+    );
+    assert_eq!(
+        eurc_client.balance(&creator),
+        creator_eurc_initial - 3_000_000 - 30_000
+    );
+
+    // Conservation invariant, per token contract: every stroop is either still
+    // with the payer, with a recipient, or with the fee collector.
+    assert_eq!(
+        xlm_client.balance(&creator)
+            + xlm_client.balance(&alice)
+            + xlm_client.balance(&bob)
+            + xlm_client.balance(&fee_collector),
+        creator_xlm_initial
+    );
+    assert_eq!(
+        usdc_client.balance(&creator)
+            + usdc_client.balance(&carol)
+            + usdc_client.balance(&fee_collector),
+        creator_usdc_initial
+    );
+    assert_eq!(
+        eurc_client.balance(&creator)
+            + eurc_client.balance(&alice)
+            + eurc_client.balance(&fee_collector),
+        creator_eurc_initial
+    );
+
+    // Lifetime per-asset accounting matches the batch response.
+    assert_eq!(fix.client.get_asset_fee_total(&fix.token_id), 15_000);
+    assert_eq!(fix.client.get_asset_fee_total(&usdc_id), 20_000);
+    assert_eq!(fix.client.get_asset_fee_total(&eurc_id), 30_000);
+
+    // Batch header and individual payment records preserve token identity.
+    assert_eq!(fix.client.get_multi_asset_batch_count(), 1);
+    let batch = fix.client.get_multi_asset_batch(&1);
+    assert_eq!(batch.total_recipients, 4);
+    assert_eq!(batch.payment_ids.len(), 4);
+    assert_eq!(batch.fees.len(), 3);
+    assert_eq!(fee_for(&batch.fees, &usdc_id), 20_000);
+
+    let first = fix.client.get_payment(&1);
+    assert_eq!(first.asset, fix.token_id);
+    assert_eq!(first.payee, alice);
+    assert_eq!(first.amount, 1_000_000);
+    let third = fix.client.get_payment(&3);
+    assert_eq!(third.asset, usdc_id);
+    assert_eq!(third.payee, carol);
+    let fourth = fix.client.get_payment(&4);
+    assert_eq!(fourth.asset, eurc_id);
+
+    assert_eq!(fix.client.get_payment_count(), 4);
+    let stats = fix.client.get_stats();
+    assert_eq!(stats.total_batches_processed, 1);
+    assert_eq!(stats.total_payments_recorded, 4);
+
+    // The single-asset reader uses a separate namespace and stays empty.
+    assert_eq!(fix.client.get_batch_count(), 0);
+}
+
+#[test]
+fn test_multi_asset_batch_partial_failure_and_validation_guards() {
+    let fix = TestFixture::new();
+    let creator = Address::generate(&fix.env);
+    let payee = Address::generate(&fix.env);
+    fix.mint(&creator, 10_000_000);
+
+    // No fee config: fees are disabled, so the batch settles principal only.
+    let mut legs = Vec::new(&fix.env);
+    legs.push_back(MultiAssetPayment {
+        payee: payee.clone(),
+        amount: 0i128,
+        asset: fix.token_id.clone(),
+    });
+    legs.push_back(MultiAssetPayment {
+        payee: payee.clone(),
+        amount: -5i128,
+        asset: fix.token_id.clone(),
+    });
+    legs.push_back(MultiAssetPayment {
+        payee: payee.clone(),
+        amount: 250_000i128,
+        asset: fix.token_id.clone(),
+    });
+
+    let result = fix.client.execute_multi_asset_batch(
+        &creator,
+        &legs,
+        &String::from_str(&fix.env, "partial_multi_asset"),
+    );
+    assert_eq!(result.total_requests, 3);
+    assert_eq!(result.successful, 1);
+    assert_eq!(result.failed, 2);
+    assert_eq!(result.fees.len(), 0);
+    assert_eq!(fix.token_client.balance(&payee), 250_000);
+    assert_eq!(fix.client.get_payment_count(), 1);
+
+    // Empty batches are rejected before any transfer or record is written.
+    let empty = Vec::new(&fix.env);
+    let empty_result = fix.client.try_execute_multi_asset_batch(
+        &creator,
+        &empty,
+        &String::from_str(&fix.env, "empty_multi_asset"),
+    );
+    assert!(matches!(empty_result, Err(Ok(PaymentError::BatchEmpty))));
+
+    // The 100-leg cap mirrors create_batch and is enforced before transfers.
+    let mut too_many = Vec::new(&fix.env);
+    for _ in 0..101 {
+        too_many.push_back(MultiAssetPayment {
+            payee: Address::generate(&fix.env),
+            amount: 1_000i128,
+            asset: fix.token_id.clone(),
+        });
+    }
+    let too_large_result = fix.client.try_execute_multi_asset_batch(
+        &creator,
+        &too_many,
+        &String::from_str(&fix.env, "too_many_multi_asset"),
+    );
+    assert!(matches!(
+        too_large_result,
+        Err(Ok(PaymentError::BatchTooLarge))
+    ));
+    assert_eq!(fix.client.get_multi_asset_batch_count(), 1);
+    assert_eq!(fix.client.get_payment_count(), 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

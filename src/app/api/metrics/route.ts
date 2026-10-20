@@ -10,8 +10,7 @@ import {
   getDbQueryMetrics,
   recordRpcFailoverState,
   LATENCY_BUCKET_BOUNDS,
-  RPC_LATENCY_BUCKET_BOUNDS,
-  DB_LATENCY_BUCKET_BOUNDS,
+  SSE_DURATION_BUCKET_BOUNDS,
 } from "@/lib/metrics-counters";
 import { getRpcFailoverState } from "@/lib/rpc-failover";
 import { timingSafeEqual } from "@/lib/crypto";
@@ -337,8 +336,39 @@ export async function buildMetrics(): Promise<string> {
     "",
     "# HELP ophirpay_sse_dropped_events_total SSE events shed by the bounded slow-consumer buffer",
     "# TYPE ophirpay_sse_dropped_events_total counter",
-    `ophirpay_sse_dropped_events_total ${c.sse_dropped_events_total}`
+    `ophirpay_sse_dropped_events_total ${c.sse_dropped_events_total}`,
+    "",
+    "# HELP ophirpay_sse_active_connections Currently active SSE client connections partitioned by route",
+    "# TYPE ophirpay_sse_active_connections gauge",
+    ...c.sse_active_connections.map(
+      (m) =>
+        `ophirpay_sse_active_connections{route="${escapeLabelValue(m.route)}"} ${m.count}`
+    )
   );
+
+  // ── SSE Connection Durations (issue #1425) ──────────────────
+  if (c.sse_connection_durations.length > 0) {
+    lines.push(
+      "",
+      "# HELP ophirpay_sse_connection_duration_seconds Histogram of SSE client connection durations in seconds",
+      "# TYPE ophirpay_sse_connection_duration_seconds histogram"
+    );
+    for (const entry of c.sse_connection_durations) {
+      const route = escapeLabelValue(entry.route);
+      const obs = entry.observation;
+      for (let i = 0; i < SSE_DURATION_BUCKET_BOUNDS.length; i++) {
+        const le = SSE_DURATION_BUCKET_BOUNDS[i];
+        lines.push(
+          `ophirpay_sse_connection_duration_seconds_bucket{route="${route}",le="${le}"} ${obs.buckets[i]}`
+        );
+      }
+      lines.push(
+        `ophirpay_sse_connection_duration_seconds_bucket{route="${route}",le="+Inf"} ${obs.buckets[SSE_DURATION_BUCKET_BOUNDS.length]}`,
+        `ophirpay_sse_connection_duration_seconds_sum{route="${route}"} ${obs.sum.toFixed(3)}`,
+        `ophirpay_sse_connection_duration_seconds_count{route="${route}"} ${obs.count}`
+      );
+    }
+  }
 
   // ── Database Connection Pool Metrics (#1371) ─────────────────
   if (typeof prismaModule.getPrismaPrometheusMetrics === "function") {

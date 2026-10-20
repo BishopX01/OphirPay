@@ -9,6 +9,8 @@ const mockCreateEscrow = vi.hoisted(() => vi.fn());
 const mockClaimEscrow = vi.hoisted(() => vi.fn());
 const mockReleaseEscrow = vi.hoisted(() => vi.fn());
 const mockReleaseByArbiter = vi.hoisted(() => vi.fn());
+const mockRaiseDispute = vi.hoisted(() => vi.fn());
+const mockResolveDispute = vi.hoisted(() => vi.fn());
 const mockSuccess = vi.hoisted(() => vi.fn());
 const mockError = vi.hoisted(() => vi.fn());
 
@@ -36,6 +38,8 @@ vi.mock("@/lib/contract-advanced", () => ({
   claimEscrow: mockClaimEscrow,
   releaseEscrow: mockReleaseEscrow,
   releaseEscrowByArbiter: mockReleaseByArbiter,
+  raiseEscrowDispute: mockRaiseDispute,
+  resolveEscrowDispute: mockResolveDispute,
   getContractOwner: vi.fn(),
 }));
 
@@ -68,6 +72,8 @@ describe("EscrowsPage", () => {
     });
     mockClaimEscrow.mockResolvedValue({ success: true });
     mockCreateEscrow.mockResolvedValue({ success: true });
+    mockRaiseDispute.mockResolvedValue({ success: true });
+    mockResolveDispute.mockResolvedValue({ success: true });
   });
 
   it("shows escrow parties, amount, deadline, and beneficiary claim action", () => {
@@ -77,6 +83,49 @@ describe("EscrowsPage", () => {
     expect(screen.getByText("25.00 XLM")).toBeTruthy();
     expect(screen.getByText("Claim escrow")).toBeTruthy();
     expect(screen.getByText("Milestone payment")).toBeTruthy();
+  });
+
+  it("lets the beneficiary open a dispute when an arbiter is configured", async () => {
+    mockUseApiQuery.mockReturnValue({
+      data: [{ ...escrow, arbiter: "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC" }],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(<EscrowsPage />);
+
+    fireEvent.click(screen.getByTestId("raise-dispute"));
+    await waitFor(() => {
+      expect(mockRaiseDispute).toHaveBeenCalledWith(beneficiary, 3);
+    });
+  });
+
+  it("shows the dispute banner and locks claim actions until the arbiter resolves", async () => {
+    const refetch = vi.fn();
+    mockUseApiQuery.mockReturnValue({
+      data: [
+        {
+          ...escrow,
+          arbiter: beneficiary,
+          dispute_initiated_at: 1_700_000_000,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      refetch,
+    });
+    render(<EscrowsPage />);
+
+    expect(screen.getByTestId("dispute-banner")).toBeTruthy();
+    expect(screen.getByText("Disputed")).toBeTruthy();
+    expect(screen.getByText("Claim escrow")).toBeDisabled();
+    expect(screen.queryByTestId("raise-dispute")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("resolve-to-buyer"));
+    await waitFor(() => {
+      expect(mockResolveDispute).toHaveBeenCalledWith(beneficiary, 3, false);
+      expect(refetch).toHaveBeenCalledOnce();
+    });
   });
 
   it("submits escrow creation in exact stroops and refreshes the list", async () => {

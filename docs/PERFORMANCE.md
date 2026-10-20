@@ -105,6 +105,57 @@ Config (all optional):
 Raw JSON results are written to `tests/load/results/` (gitignored) so you can
 diff runs without polluting the repo.
 
+### High-concurrency payments ingestion benchmark (#1404)
+
+`tests/load/payments-concurrency.js` is a mixed-workload benchmark for the
+payments dashboard. It holds **200 concurrent connections** and sends a
+realistic request mix through autocannon's request iterator:
+
+| Share | Operation | Request |
+|---:|---|---|
+| 70% | Status queries | `GET /api/payments?limit=20` |
+| 20% | Payment creations | `POST /api/payments` (unique `[<id>]` per request) |
+| 10% | Webhook polling | `GET /api/hooks?event_type=payment.created` |
+
+The ten-entry plan repeats in a 7:2:1 ratio, so no custom load generator is
+needed and every operation travels through the same Next.js route handler as
+production traffic. The benchmark enforces the published ingestion SLOs:
+
+| Threshold | Default | Env override |
+|---|---:|---|
+| p95 latency | `< 350 ms` | `LOAD_TEST_P95_MS` |
+| HTTP 5xx | `0%` | `LOAD_TEST_MAX_5XX_PCT` |
+| Sustained throughput | `>= 150 req/s` | `LOAD_TEST_MIN_RPS` |
+| Concurrent users | `200` | `LOAD_TEST_CONCURRENCY` |
+| Duration | `15 s` | `LOAD_TEST_DURATION` |
+| Offered rate | `150 req/s` | `LOAD_TEST_TARGET_RPS` |
+
+```bash
+# Full run against a local instance (authenticated routes need a key).
+LOAD_TEST_API_KEY=oph_... npm run test:load:concurrency
+
+# Write the structured p50/p90/p95/p99 summary and evaluate it with the
+# shared baseline gate in one step.
+LOAD_TEST_API_KEY=oph_... npm run test:load:concurrency:gate
+
+# Print the request plan and thresholds without sending traffic.
+node tests/load/payments-concurrency.js --dry-run
+```
+
+`--json` emits `tests/load/results/payments-concurrency.json` (or the path in
+`--json=<path>`) in the same envelope shape consumed by
+`scripts/check-load-baselines.mjs`. The endpoint is tracked as
+`/api/payments-concurrency` in `tests/load/baselines.json` with `margin: 1`:
+the SLO is absolute, so unlike the general endpoint table it must not inherit
+the file-wide 3× runner-noise relaxation. The gate still applies the documented
+absolute error caps, and the benchmark itself exits non-zero as soon as p95,
+5xx rate, or throughput misses.
+
+Use a seeded test database (at least 2,000 payments) and disable the global
+rate limiter (`RATE_LIMIT_RPM=100000`); otherwise 429s make the non-2xx cap
+meaningless. This benchmark is intentionally **CI-optional** for pull requests
+for the same reason as the other load tests — it needs a live server.
+
 ### CI-optional
 
 Load tests are **not** part of the required CI pipeline. They need a live
@@ -140,7 +191,7 @@ worst documented row per endpoint (from the table below), and
 
 | Threshold | Compared as |
 |---|---|
-| `p95Ms`, `p99Ms` | measured ≤ threshold × `LOAD_TEST_MARGIN` (default **3**) — latency scales with runner hardware |
+| `p95Ms`, `p99Ms` | measured ≤ threshold × the endpoint's `margin` when set, otherwise `LOAD_TEST_MARGIN` (default **3**) — latency scales with runner hardware |
 | `errorPct` | measured ≤ threshold (absolute) — transport errors per connection |
 | `non2xxPct` | measured ≤ threshold (absolute) — 4xx/5xx per request (`null` for SSE) |
 

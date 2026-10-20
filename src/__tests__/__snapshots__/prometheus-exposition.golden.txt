@@ -155,6 +155,11 @@ ophirpay_sse_open_connections 0
 # TYPE ophirpay_sse_dropped_events_total counter
 ophirpay_sse_dropped_events_total 0
 
+# HELP ophirpay_sse_active_connections Currently active SSE client connections partitioned by route
+# TYPE ophirpay_sse_active_connections gauge
+ophirpay_sse_active_connections{route="events"} 0
+ophirpay_sse_active_connections{route="audit-log"} 0
+
 # HELP prisma_pool_connections_busy Number of currently used database connections in the pool
 # TYPE prisma_pool_connections_busy gauge
 prisma_pool_connections_busy 0

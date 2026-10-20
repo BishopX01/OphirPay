@@ -99,6 +99,57 @@ pub struct BatchCreateResult {
     pub total_amount: i128,
 }
 
+/// One leg of a multi-asset batch payment (#1403).
+///
+/// Unlike [`Payment`], the asset moves with each leg rather than being fixed
+/// for the whole batch, so a single invocation can pay recipients in XLM,
+/// USDC, EURC, or any other SAC token.
+#[contracttype]
+#[derive(Clone)]
+pub struct MultiAssetPayment {
+    pub payee: Address,
+    pub amount: i128,
+    pub asset: Address,
+}
+
+/// Protocol fees collected for one asset during a multi-asset batch (#1403).
+#[contracttype]
+#[derive(Clone)]
+pub struct AssetFeeTotal {
+    pub asset: Address,
+    pub fee: i128,
+}
+
+/// Result of [`OphirPayContract::execute_multi_asset_batch`] (#1403).
+#[contracttype]
+#[derive(Clone)]
+pub struct MultiAssetBatchResult {
+    pub batch_id: u64,
+    pub total_requests: u32,
+    pub successful: u32,
+    pub failed: u32,
+    /// Fees actually collected, grouped by token contract. Empty when fees are
+    /// disabled or no fee collector is configured.
+    pub fees: Vec<AssetFeeTotal>,
+}
+
+/// Persisted header for a multi-asset batch (#1403).
+///
+/// `payment_ids` point at the individual [`Payment`] records, exactly like
+/// [`BatchPayment`]; the per-asset fee totals are stored here as well so an
+/// auditor can reconcile the batch without replaying token history.
+#[contracttype]
+#[derive(Clone)]
+pub struct MultiAssetBatchRecord {
+    pub id: u64,
+    pub creator: Address,
+    pub total_recipients: u32,
+    pub timestamp: u64,
+    pub tx_hash: String,
+    pub payment_ids: Vec<u64>,
+    pub fees: Vec<AssetFeeTotal>,
+}
+
 /// Aggregate statistics across all contract activity.
 #[contracttype]
 #[derive(Clone)]

@@ -10,7 +10,11 @@ import {
   createBoundedSseBuffer,
   type BoundedSseBuffer,
 } from "@/lib/events/sse-buffer";
-import { incMetric } from "@/lib/metrics-counters";
+import {
+  incMetric,
+  incSseActiveConnection,
+  recordSseConnectionDuration,
+} from "@/lib/metrics-counters";
 
 /** Map of connected SSE clients (used for the safety-timeout sweep). */
 const clients = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
@@ -98,6 +102,7 @@ async function pollContractForAuditEntries(
 export const GET = withMetrics("GET /api/audit-log/sse", withRequestLogging(async function GET() {
   const clientId = ++clientCounter;
   const contractId = process.env.NEXT_PUBLIC_CONTRACT_ID || DEFAULT_CONTRACT_ID;
+  const startTime = Date.now();
 
   let closed = false;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -110,8 +115,13 @@ export const GET = withMetrics("GET /api/audit-log/sse", withRequestLogging(asyn
     if (pollInterval) clearInterval(pollInterval);
     if (safetyTimeout) clearTimeout(safetyTimeout);
     clients.delete(String(clientId));
-    // Release the connection from the shared gauge exactly once.
+    // Release the connection from the shared and route gauges, and record duration into histogram.
     incMetric("sse_open_connections", -1);
+    incSseActiveConnection("audit-log", -1);
+    recordSseConnectionDuration(
+      "audit-log",
+      Math.max(0, (Date.now() - startTime) / 1000)
+    );
   };
 
   let lastDropped = 0;
@@ -133,6 +143,7 @@ export const GET = withMetrics("GET /api/audit-log/sse", withRequestLogging(asyn
       buffer.attach(controller);
       clients.set(String(clientId), controller);
       incMetric("sse_open_connections");
+      incSseActiveConnection("audit-log", 1);
       let lastSeenId = 0;
 
       // Send connected event immediately.

@@ -96,6 +96,7 @@ navigation. The shared helpers currently cover these boundaries:
 | `installAdminMocks` in `e2e/helpers/admin-mocks.ts` | The multisig mocks plus CSRF, pause state, timelock, hooks, fee config, RBAC, and API-key routes |
 | `installRefundsMocks` in `e2e/helpers/refunds-mock.ts` | Wallet-session and CSRF endpoints, a stateful in-memory `/api/refunds` ledger, Soroban RPC, and Horizon transaction confirmation |
 | `installSseMock` in `e2e/helpers/sse-mock.ts` | `GET /api/events`, proxied to a local streaming HTTP server so the test can emit and reconnect to SSE events |
+| `installEscrowMocks` in `e2e/helpers/escrow-helper.ts` | Wallet-session + CSRF endpoints, a stateful `/api/escrows` ledger, Horizon balances/confirmations, and Soroban RPC with `initiate_dispute` / `resolve_dispute` state transitions |
 
 The UI tests that use these helpers exercise the browser UI and client
 integration against controlled responses; they do not verify a live database
