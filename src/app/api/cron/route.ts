@@ -22,6 +22,10 @@ import {
   selectDuePayments,
 } from "@/lib/scheduler";
 import { publicKeyFromSecret, submitPaymentFromSecret } from "@/lib/stellar";
+import {
+  processWebhookRetryQueue,
+  type WebhookRetryQueueSummary,
+} from "@/lib/webhook-delivery-service";
 
 /**
  * Scheduled payment execution (issue #175).
@@ -69,6 +73,25 @@ interface RunSummary {
   skipped: number;
   sourcePublicKey: string;
   results: ExecutionResult[];
+  /** Webhook retries drained by the same run. */
+  webhookRetries: WebhookRetryQueueSummary;
+}
+
+/**
+ * Which queue this invocation should drain.
+ *
+ * `all` (the default) keeps the existing scheduled-payment behaviour and also
+ * drains the webhook retry queue. `webhook-retries` allows the retry processor
+ * to be triggered on its own — useful when the signing key for scheduled
+ * payments is not configured, or when retries need a faster cadence.
+ */
+type CronTask = "all" | "webhook-retries";
+
+function resolveCronTask(request: Request): CronTask {
+  const { searchParams } = new URL(request.url);
+  return searchParams.get("task") === "webhook-retries"
+    ? "webhook-retries"
+    : "all";
 }
 
 async function runScheduledPayments(request: Request) {
@@ -89,6 +112,17 @@ async function runScheduledPayments(request: Request) {
         );
       }
       return unauthorizedError("Invalid or missing cron secret.");
+    }
+
+    const task = resolveCronTask(request);
+
+    // Always drain due webhook retries first. A failing retry batch is
+    // isolated inside `processWebhookRetryQueue`, so it can never block the
+    // payment scheduler below.
+    const webhookRetries = await processWebhookRetryQueue();
+
+    if (task === "webhook-retries") {
+      return successResponse({ webhookRetries });
     }
 
     // Checked before any row is touched: without a signing account the run
@@ -150,6 +184,7 @@ async function runScheduledPayments(request: Request) {
       skipped: 0,
       sourcePublicKey,
       results: [],
+      webhookRetries,
     };
 
     // Sequential on purpose: every submission loads the operator account and

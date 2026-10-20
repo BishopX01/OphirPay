@@ -26,6 +26,8 @@ export const AUDIT_SSE_MAX_BUFFERED_EVENTS = 100;
 export const AUDIT_SSE_MAX_BUFFERED_BYTES = 256 * 1024;
 /** Close a backlogged connection that hasn't drained within this budget. */
 export const AUDIT_SSE_IDLE_TIMEOUT_MS = 60_000;
+/** Keep-alive comment cadence (proxy/CDN idle timeout is typically 30–60 s). */
+export const AUDIT_SSE_PING_INTERVAL_MS = 20_000;
 
 type AuditController = ReadableStreamDefaultController<Uint8Array>;
 
@@ -106,6 +108,7 @@ export const GET = withMetrics("GET /api/audit-log/sse", withRequestLogging(asyn
 
   let closed = false;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let pingInterval: ReturnType<typeof setInterval> | null = null;
   let safetyTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // Cleanup on stream cancel / client disconnect / slow-consumer disconnect.
@@ -113,6 +116,7 @@ export const GET = withMetrics("GET /api/audit-log/sse", withRequestLogging(asyn
     if (closed) return;
     closed = true;
     if (pollInterval) clearInterval(pollInterval);
+    if (pingInterval) clearInterval(pingInterval);
     if (safetyTimeout) clearTimeout(safetyTimeout);
     clients.delete(String(clientId));
     // Release the connection from the shared and route gauges, and record duration into histogram.
@@ -156,6 +160,13 @@ export const GET = withMetrics("GET /api/audit-log/sse", withRequestLogging(asyn
       // Safety: auto-cleanup after 10 minutes even if the stream is abandoned
       // without a cancellation signal.
       safetyTimeout = setTimeout(cleanup, 10 * 60 * 1000);
+
+      // Keep-alive comment every 20 s so proxies don't silently drop an idle
+      // stream between (possibly slow) contract polls.
+      pingInterval = setInterval(() => {
+        if (closed) return;
+        buffer.pushComment("ping");
+      }, AUDIT_SSE_PING_INTERVAL_MS);
 
       // Poll contract every 15 seconds for new entries.
       pollInterval = setInterval(async () => {

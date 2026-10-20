@@ -54,6 +54,16 @@ export const STANDARDIZED_KEY_PREFIX = "op_";
  */
 export const API_KEY_RANDOM_BYTES = 32;
 
+/**
+ * Minimum entropy (in bytes) required for a *newly created* API key.
+ *
+ * 32 bytes (256 bits) is far beyond what any offline guessing attack can
+ * reach, and matches the standardized `op_` creation format. Verification of
+ * older keys stays deliberately more permissive (see `API_KEY_LOOKUP_PATTERN`)
+ * so pre-#701 24-byte keys keep authenticating during the migration window.
+ */
+export const MIN_API_KEY_ENTROPY_BYTES = 32;
+
 /** Lowercase hex characters produced by `API_KEY_RANDOM_BYTES`. */
 export const API_KEY_RANDOM_HEX_LENGTH = API_KEY_RANDOM_BYTES * 2;
 
@@ -136,6 +146,64 @@ export function validateKeyFormat(
   }
 
   return { valid: true, env };
+}
+
+/** Result of checking the CSPRNG entropy carried by a raw API key. */
+export interface ApiKeyEntropyCheck {
+  /** Whether the key meets {@link MIN_API_KEY_ENTROPY_BYTES}. */
+  valid: boolean;
+  /** Entropy bytes carried by the random segment (0 when unparseable). */
+  bytes: number;
+  /** Human-readable rejection reason when `valid` is false. */
+  error?: string;
+}
+
+/**
+ * Enforce the minimum entropy threshold for key *creation* (issue: API key
+ * KDF hardening).
+ *
+ * Only the standardized `op_{env}_{hex}_{crc}` shape is considered: a
+ * creation path must never mint anything shorter than 32 CSPRNG bytes, since
+ * a low-entropy secret cannot be rescued by hashing it with a slow KDF — it
+ * can simply be guessed offline. Legacy `oph_` keys are intentionally not
+ * judged here; they are still accepted at auth time.
+ */
+export function checkApiKeyEntropy(
+  rawKey: string | null | undefined
+): ApiKeyEntropyCheck {
+  if (!rawKey || typeof rawKey !== "string") {
+    return { valid: false, bytes: 0, error: "API key must be a non-empty string" };
+  }
+
+  const match = /^op_(?:live|test)_([0-9a-fA-F]+)_[0-9a-fA-F]{8}$/.exec(
+    rawKey.trim()
+  );
+  if (!match) {
+    return {
+      valid: false,
+      bytes: 0,
+      error: 'Malformed API key: expected format "op_{env}_{32_hex_bytes}_{4_byte_crc}"',
+    };
+  }
+
+  const bytes = Math.floor(match[1]!.length / 2);
+  if (bytes < MIN_API_KEY_ENTROPY_BYTES) {
+    return {
+      valid: false,
+      bytes,
+      error: `API key entropy below the minimum requirement of ${MIN_API_KEY_ENTROPY_BYTES} bytes (got ${bytes})`,
+    };
+  }
+
+  return { valid: true, bytes };
+}
+
+/** Throw unless `rawKey` carries at least {@link MIN_API_KEY_ENTROPY_BYTES}. */
+export function assertMinimumKeyEntropy(rawKey: string): void {
+  const result = checkApiKeyEntropy(rawKey);
+  if (!result.valid) {
+    throw new Error(`Rejected API key creation: ${result.error ?? "insufficient entropy"}`);
+  }
 }
 
 /** True when `rawKey` matches the standardized creation format with valid CRC. */

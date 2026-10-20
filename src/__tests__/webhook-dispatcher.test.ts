@@ -21,9 +21,11 @@ vi.mock("@/lib/prisma", () => ({
   default: { webhook: { findMany: mocks.findMany } },
 }));
 
-vi.mock("@/lib/webhook-deliver", () => ({
-  deliverWebhook: mocks.deliverWebhook,
-}));
+vi.mock("@/lib/webhook-deliver", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/webhook-deliver")>();
+  return { ...actual, deliverWebhook: mocks.deliverWebhook };
+});
 
 vi.mock("@/lib/webhook-event-store", () => ({
   storeWebhookEvent: mocks.storeWebhookEvent,
@@ -118,7 +120,7 @@ describe("dispatchWebhookEvent", () => {
     expect(mocks.recordWebhookDelivery).not.toHaveBeenCalled();
   });
 
-  it("dead-letters a delivery when the endpoint rejects the payload", async () => {
+  it("queues a failed delivery for retry instead of dead-lettering immediately", async () => {
     mocks.findMany.mockResolvedValue([webhook("w1", "[]")]);
     mocks.deliverWebhook.mockResolvedValue({
       success: false,
@@ -132,11 +134,13 @@ describe("dispatchWebhookEvent", () => {
     expect(mocks.recordWebhookDelivery).toHaveBeenCalledWith(
       "w1",
       "evt_1",
-      "DEAD_LETTER",
+      "RETRYING",
       expect.objectContaining({
         responseCode: 500,
         isReplay: false,
         attempts: 3,
+        retryCount: 0,
+        nextAttemptAt: expect.any(Date),
       })
     );
   });

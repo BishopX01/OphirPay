@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 
 import prisma from "@/lib/prisma";
-import { deliverWebhook } from "@/lib/webhook-deliver";
+import {
+  deliverWebhook,
+  deliveryStatusAfterFailure,
+  nextWebhookAttemptAt,
+} from "@/lib/webhook-deliver";
 import { logger } from "@/lib/logger";
 import type { WebhookEventType } from "@/app/api/webhooks/event-types";
 import {
@@ -61,13 +65,25 @@ export async function dispatchWebhookEvent(
       webhooks.map(async (wh) => {
         const result = await deliverWebhook(wh.url, wh.secret, payload);
         if (storedEventId) {
-          await recordWebhookDelivery(wh.id, storedEventId, result.success ? "SUCCESS" : "DEAD_LETTER", {
-            responseCode: result.statusCode,
-            latencyMs: result.latencyMs,
-            attempts: result.attempts,
-            errorMessage: result.errorMessage,
-            isReplay: false,
-          });
+          // A failed delivery is queued for the cron retry processor rather
+          // than being dead-lettered immediately. `retryCount: 0` schedules
+          // the first retry (1 minute); after the final retry the processor
+          // flips the row to DEAD_LETTER.
+          await recordWebhookDelivery(
+            wh.id,
+            storedEventId,
+            result.success ? "SUCCESS" : deliveryStatusAfterFailure(0),
+            {
+              responseCode: result.statusCode,
+              latencyMs: result.latencyMs,
+              attempts: result.attempts,
+              errorMessage: result.errorMessage,
+              isReplay: false,
+              retryCount: 0,
+              nextAttemptAt: result.success ? null : nextWebhookAttemptAt(0),
+              lastAttemptAt: new Date(),
+            },
+          );
         }
         return result.success;
       }),

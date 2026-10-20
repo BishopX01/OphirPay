@@ -12,14 +12,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  findFirst: vi.fn(),
+  findMany: vi.fn(),
   update: vi.fn(() => Promise.resolve()),
   logCreate: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@/lib/prisma", () => ({
   default: {
-    apiKey: { findFirst: mocks.findFirst, update: mocks.update },
+    apiKey: { findMany: mocks.findMany, update: mocks.update },
     apiKeyRequestLog: { create: mocks.logCreate },
   },
 }));
@@ -28,7 +28,7 @@ import {
   authenticateRequest,
   requireAuth,
   withApiAuth,
-  apiKeyLookupHashes,
+  hashApiKeyV1,
   deriveKeyPrefix,
 } from "@/lib/api-auth";
 
@@ -53,12 +53,13 @@ function storedKey(overrides: Record<string, unknown> = {}) {
     name: "CI key",
     expiresAt: null,
     scopes: ["read:payments"],
+    keyHash: hashApiKeyV1(RAW_KEY),
     ...overrides,
   };
 }
 
 beforeEach(() => {
-  mocks.findFirst.mockReset();
+  mocks.findMany.mockReset();
   mocks.update.mockClear();
   mocks.logCreate.mockClear();
 });
@@ -67,11 +68,11 @@ describe("authenticateRequest", () => {
   it("returns null when no API key header is present", async () => {
     const result = await authenticateRequest(new Request("http://localhost/api/payments"));
     expect(result).toBeNull();
-    expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(mocks.findMany).not.toHaveBeenCalled();
   });
 
-  it("looks the key up by prefix and both accepted digests", async () => {
-    mocks.findFirst.mockResolvedValue(storedKey());
+  it("looks candidates up by prefix and verifies the stored digest", async () => {
+    mocks.findMany.mockResolvedValue([storedKey()]);
 
     const result = await authenticateRequest(requestWithKey(RAW_KEY));
 
@@ -82,15 +83,19 @@ describe("authenticateRequest", () => {
       scopes: ["read:payments"],
     });
 
-    // Newest digest format first, then the legacy bare-SHA-256 digest, so
-    // pre-#701 keys keep authenticating alongside v1-tagged ones.
-    expect(mocks.findFirst).toHaveBeenCalledWith({
-      where: {
-        keyHash: { in: apiKeyLookupHashes(RAW_KEY) },
-        prefix: deriveKeyPrefix(RAW_KEY),
-        revokedAt: null,
+    // A salted KDF cannot be looked up by digest, so the indexed prefix
+    // narrows the candidates and the digest is verified afterwards.
+    expect(mocks.findMany).toHaveBeenCalledWith({
+      where: { prefix: deriveKeyPrefix(RAW_KEY), revokedAt: null },
+      select: {
+        id: true,
+        userId: true,
+        name: true,
+        expiresAt: true,
+        scopes: true,
+        keyHash: true,
       },
-      select: { id: true, userId: true, name: true, expiresAt: true, scopes: true },
+      take: 10,
     });
 
     // lastUsed / request log are fire-and-forget writes.
@@ -100,44 +105,44 @@ describe("authenticateRequest", () => {
 
   it("rejects malformed key material before touching the database", async () => {
     expect(await authenticateRequest(requestWithKey("oph_livekeyvalue"))).toBeNull();
-    expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(mocks.findMany).not.toHaveBeenCalled();
   });
 
   it("defaults a null scopes column to an empty array", async () => {
-    mocks.findFirst.mockResolvedValue(storedKey({ scopes: null }));
+    mocks.findMany.mockResolvedValue([storedKey({ scopes: null })]);
     const result = await authenticateRequest(requestWithKey());
     expect(result?.scopes).toEqual([]);
   });
 
   it("rejects an expired key", async () => {
-    mocks.findFirst.mockResolvedValue(
-      storedKey({ expiresAt: new Date(Date.now() - 60_000) })
-    );
+    mocks.findMany.mockResolvedValue([
+      storedKey({ expiresAt: new Date(Date.now() - 60_000) }),
+    ]);
     expect(await authenticateRequest(requestWithKey())).toBeNull();
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.logCreate).not.toHaveBeenCalled();
   });
 
   it("accepts a key that expires in the future", async () => {
-    mocks.findFirst.mockResolvedValue(
-      storedKey({ expiresAt: new Date(Date.now() + 60_000) })
-    );
+    mocks.findMany.mockResolvedValue([
+      storedKey({ expiresAt: new Date(Date.now() + 60_000) }),
+    ]);
     expect(await authenticateRequest(requestWithKey())).not.toBeNull();
   });
 
   it("returns null for an unknown key", async () => {
-    mocks.findFirst.mockResolvedValue(null);
+    mocks.findMany.mockResolvedValue([]);
     expect(await authenticateRequest(requestWithKey())).toBeNull();
   });
 
   it("fails closed when the database is unavailable", async () => {
-    mocks.findFirst.mockRejectedValue(new Error("connection refused"));
+    mocks.findMany.mockRejectedValue(new Error("connection refused"));
     expect(await authenticateRequest(requestWithKey())).toBeNull();
   });
 });
 
 describe("requireAuth", () => {
   it("returns the user context on success", async () => {
-    mocks.findFirst.mockResolvedValue(storedKey());
+    mocks.findMany.mockResolvedValue([storedKey()]);
     const result = await requireAuth(requestWithKey());
     expect(result).toEqual({ userId: "user_1", keyId: "key_1" });
   });
@@ -163,7 +168,7 @@ describe("withApiAuth (no required scope)", () => {
   });
 
   it("invokes the handler and forwards extra arguments when authenticated", async () => {
-    mocks.findFirst.mockResolvedValue(storedKey());
+    mocks.findMany.mockResolvedValue([storedKey()]);
     const handler = vi.fn(async () => new Response("ok", { status: 200 }));
     const wrapped = withApiAuth(handler);
     const req = requestWithKey();
