@@ -551,6 +551,12 @@ model WebhookDelivery {
   responseCode  Int?
   latencyMs     Int?
   attempts      Int            @default(1)
+  /// Number of scheduled (cron-driven) retry cycles already consumed.
+  retryCount    Int            @default(0)
+  /// When the retry queue should next attempt this delivery (null when not queued).
+  nextAttemptAt DateTime?
+  /// Timestamp of the most recent delivery attempt.
+  lastAttemptAt DateTime?
   errorMessage  String?
   isReplay      Boolean        @default(false)
   replayBatchId String?
@@ -571,11 +577,15 @@ model WebhookDelivery {
 
   @@index([webhookId, deliveredAt])
   @@index([replayBatchId])
+  /// Retry-queue scan: due RETRYING rows by next attempt time.
+  @@index([status, nextAttemptAt])
 }
 
 enum DeliveryStatus {
   SUCCESS
   FAILED
+  /// Failed, but scheduled for another attempt by the retry queue.
+  RETRYING
   DEAD_LETTER
   PENDING
 }
