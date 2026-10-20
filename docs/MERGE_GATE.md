@@ -15,13 +15,36 @@ commands are listed so failures can be reproduced individually.
 | Contract WASM and Rust tests | `ci.yml` | `cd contracts/ophirpay && cargo test`; repeat in `contracts/emitter` |
 | Secrets scan | `ci.yml` | `gitleaks detect --config .gitleaks.toml --redact` |
 | Helm lint/render | `ci.yml` | `helm lint helm/ophirpay` |
-| Prisma schema and migration replay | `prisma-ci.yml` | `npm run db:validate:migrations` |
-| Contract regression guard | `contract-regression.yml` | `node scripts/check-contract-regressions.mjs` |
+| `prisma-gate` (Prisma schema and migration replay) | `prisma-ci.yml` | `npm run db:validate:migrations` |
+| `contract-regression-gate` (WASM size and fee guardrails) | `contract-regression.yml` | `node scripts/check-contract-regressions.mjs` |
+| `docker-smoke-gate` (image build and compose smoke test) | `docker-smoke.yml` | `docker build -t ophirpay:smoke . && docker compose up -d app` |
 | Integration-branch policy | `enforce-integration-branch.yml` | Open the PR against `integration/staging` |
 
-The path-scoped Prisma and contract checks are required when their files are
-changed. The integration-branch policy is required for every PR while the
-batch-integration branch exists.
+### Gate jobs for path-scoped workflows
+
+`prisma-ci.yml`, `contract-regression.yml` and `docker-smoke.yml` do **not** use
+workflow-level `paths:` filters. When a workflow is skipped by a path filter its
+check never reports, so marking it required in branch protection leaves every
+unrelated PR stuck on “Expected — waiting for status”. Instead, each of the
+three workflows:
+
+1. runs a `changes` job (`dorny/paths-filter`, pinned to a commit SHA) that
+   detects whether its area was touched;
+2. runs the heavy job only when that filter matches;
+3. runs a final gate job with `if: always()` that succeeds when the heavy job
+   passed **or** was legitimately skipped, and fails when it failed or the
+   change detection failed.
+
+Require **only the gate jobs** — `prisma-gate`, `contract-regression-gate` and
+`docker-smoke-gate` — in branch protection. Do not require `changes` or the
+heavy jobs (`prisma`, `contract-regression`, `docker-smoke`): they are skipped
+on most PRs and would reproduce the stuck-pending problem.
+
+Because the gates always report, a docs-only PR shows all three as passed with
+the heavy jobs skipped, while a PR touching `prisma/**`, `contracts/**` or the
+Docker inputs runs the full job and fails the gate when the job fails. The
+integration-branch policy (`enforce-base`) remains required for every PR while
+the batch-integration branch exists.
 
 ## Keeping `integration/staging` in sync with `main`
 
@@ -68,11 +91,10 @@ checks for an ordinary pull request:
 - `scorecard.yml` — scheduled OpenSSF scorecard analysis.
 - `stale.yml` — scheduled issue and PR housekeeping.
 
-`docker-smoke.yml` may run on pull requests, but it is an auxiliary deployment
-smoke test unless branch protection explicitly marks its check required. Review
-the repository’s branch-protection settings when changing the required list;
-this document describes the intended gate, not a replacement for GitHub
-settings.
+Review the repository’s branch-protection settings when changing the required
+list; this document describes the intended gate, not a replacement for GitHub
+settings. Every check named in the table above uses a job `name` (or job id when
+no name is set) that must match the entry selected in GitHub exactly.
 
 ## One-command local gate
 

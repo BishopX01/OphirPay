@@ -193,9 +193,10 @@ drift apart again.
 | 6 | `deploy-config` — deploy-script config guards (`ci.yml`) | ✅ | ✅ Required |
 | 7 | `secrets-scan` — Gitleaks (`ci.yml`) | ✅ | ✅ Required |
 | 8 | `helm-lint` — Helm lint + render (`ci.yml`) | ✅ | ✅ Required |
-| 9 | `prisma` — schema + migration replay (`prisma-ci.yml`) | ✅ (prisma paths) | ✅ Required |
-| 10 | `contract-regression` — WASM size guardrails (`contract-regression.yml`) | ✅ (contract paths) | ✅ Required |
-| 11 | `enforce-base` — integration-branch guard (`enforce-integration-branch.yml`) | ✅ | ✅ Required |
+| 9 | `prisma-gate` — schema + migration replay gate (`prisma-ci.yml`) | ✅ (full job on prisma paths) | ✅ Required |
+| 10 | `contract-regression-gate` — WASM size guardrail gate (`contract-regression.yml`) | ✅ (full job on contract paths) | ✅ Required |
+| 11 | `docker-smoke-gate` — Docker build + smoke gate (`docker-smoke.yml`) | ✅ (full job on Docker inputs) | ✅ Required |
+| 12 | `enforce-base` — integration-branch guard (`enforce-integration-branch.yml`) | ✅ | ✅ Required |
 
 > **Batch mode**: while the `integration/staging` branch exists, every PR must
 > target it instead of `main` (enforced by `enforce-integration-branch.yml`),
@@ -210,7 +211,8 @@ Configure these in **Settings → Branches → Branch protection rules** for `ma
 - **Require approvals**: 1 minimum
 - **Dismiss stale pull request approvals when new commits are pushed**: ✅
 - **Require status checks to pass before merging**: ✅
-  - Required checks: `lint`, `typecheck`, `unit-tests`, `build`, `contract-wasm`, `deploy-config`, `secrets-scan`, `helm-lint`
+  - Required checks: `lint`, `typecheck`, `unit-tests`, `build`, `contract-wasm`, `deploy-config`, `secrets-scan`, `helm-lint`, `prisma-gate`, `contract-regression-gate`, `docker-smoke-gate`, `enforce-base`
+  - The path-scoped workflows are required through their **gate** jobs only; the heavy jobs are skipped on unrelated PRs and never report a status. See [`docs/MERGE_GATE.md`](docs/MERGE_GATE.md#gate-jobs-for-path-scoped-workflows).
 - **Require conversation resolution before merging**: ✅
 - **Require signed commits**: Recommended
 - **Require linear history**: Recommended
@@ -218,9 +220,9 @@ Configure these in **Settings → Branches → Branch protection rules** for `ma
 
 ### Merge Requirements Summary
 
-> A PR must pass every required check above (and the path-scoped `prisma`,
-> `contract-regression` and `enforce-base` checks) and have at least
-> **1 approving review** before it can be merged.
+> A PR must pass every required check above (including the `prisma-gate`,
+> `contract-regression-gate` and `docker-smoke-gate` gates and the `enforce-base`
+> policy check) and have at least **1 approving review** before it can be merged.
 
 ## Testing
 
