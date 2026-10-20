@@ -30,6 +30,8 @@ import { sanitizeRateLimitKey } from "@/lib/client-ip";
 export interface RateLimitResult {
   /** Whether this request is within the limit */
   allowed: boolean;
+  /** Maximum requests allowed in the current window */
+  limit: number;
   /** How many requests remain in the current window */
   remaining: number;
   /** Unix-ms timestamp when the window resets */
@@ -93,7 +95,12 @@ export class InMemoryRateLimitStore implements RateLimitStore {
     }
 
     const remaining = Math.max(0, maxRequests - entry.count);
-    return { allowed: entry.count <= maxRequests, remaining, resetAt: entry.resetAt };
+    return {
+      allowed: entry.count <= maxRequests,
+      limit: maxRequests,
+      remaining,
+      resetAt: entry.resetAt,
+    };
   }
 
   async reset(key: string): Promise<void> {
@@ -128,7 +135,12 @@ export class RedisRateLimitStore implements RateLimitStore {
     }
 
     const remaining = Math.max(0, maxRequests - count);
-    return { allowed: count <= maxRequests, remaining, resetAt: now + windowMs };
+    return {
+      allowed: count <= maxRequests,
+      limit: maxRequests,
+      remaining,
+      resetAt: now + windowMs,
+    };
   }
 
   async reset(key: string): Promise<void> {
@@ -204,7 +216,12 @@ export class HttpRedisRateLimitStore implements RateLimitStore {
     }
 
     const remaining = Math.max(0, maxRequests - count);
-    return { allowed: count <= maxRequests, remaining, resetAt: now + windowMs };
+    return {
+      allowed: count <= maxRequests,
+      limit: maxRequests,
+      remaining,
+      resetAt: now + windowMs,
+    };
   }
 
   async reset(key: string): Promise<void> {
