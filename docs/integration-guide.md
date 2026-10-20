@@ -47,6 +47,78 @@ stellar contract invoke \
 
 ## Integration Patterns
 
+## Type-safe SDK (generated from the OpenAPI spec)
+
+`docs/openapi.yaml` is the source of truth for the API. `@ophirpay/client` ships
+types generated from it, so an integration cannot silently drift from the spec:
+a renamed field, a new required body member or a changed status code shows up as
+a TypeScript error instead of a runtime surprise.
+
+```bash
+npm run generate:sdk          # rewrite packages/ophirpay-client/*.generated.*
+npm run generate:sdk -- --check   # fail if the committed output is stale (CI)
+```
+
+The generator writes three artefacts into `packages/ophirpay-client/`:
+
+| File | Contents |
+|---|---|
+| `operations.generated.js` | Operation catalogue — method, path, summary, tags, whether a body is expected |
+| `operations.generated.d.ts` | `ApiOperation` / `ApiOperationName` for the catalogue |
+| `api-types.generated.d.ts` | An interface per `components.schemas` entry plus `ApiRequestBodies`, `ApiResponseBodies`, `ApiPathParams`, `ApiQueryParams` and `ApiHeaderParams`, each keyed by operation name |
+
+### Typing a call
+
+```ts
+import type {
+  ApiHeaderParams,
+  ApiOperationName,
+  ApiRequestBodies,
+  ApiResponseBodies,
+  PaymentEnvelopeResponse,
+} from "@ophirpay/client";
+
+// Every documented route is a member of ApiOperationName (99 at the time of
+// writing), so a typo is a compile error rather than a 404.
+const op: ApiOperationName = "postApiPayments";
+
+// The request body is typed from the spec's requestBody schema…
+const body: ApiRequestBodies[typeof op] = {
+  amount: 125,
+  assetCode: "XLM",
+  destAddress: "GACNKEDGJYLLVQDXWYEEPB47Y3JEV5JNZ3RQANTJIVKKEOXX4NC4YWHU",
+};
+
+// …and the response is typed per status code.
+type Created = ApiResponseBodies[typeof op]["201"];
+
+const res = await fetch("/api/payments", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+  body: JSON.stringify(body),
+});
+const created = (await res.json()) as PaymentEnvelopeResponse;
+```
+
+Operations that take headers expose them through `ApiHeaderParams`, e.g.
+`ApiHeaderParams["postApiBatches"]` is `{ "Idempotency-Key"?: string }`. Path and
+query parameters work the same way (`ApiPathParams["getApiPaymentsId"]` is
+`{ id: string }`), so a client wrapper can be generic:
+
+```ts
+async function call<N extends ApiOperationName>(
+  name: N,
+  init: { body?: ApiRequestBodies[N]; headers?: ApiHeaderParams[N] },
+): Promise<ApiResponseBodies[N][keyof ApiResponseBodies[N]]> { /* … */ }
+```
+
+### Keeping the generated types current
+
+CI regenerates from `docs/openapi.yaml` and fails when the committed artefacts
+differ (`npm run generate:sdk -- --check`, wired into the typecheck job). After
+editing the spec, run `npm run generate:sdk` and commit the regenerated files in
+the same change; a hand-edited `*.generated.*` file is always overwritten.
+
 ## API Key Usage
 
 The dashboard's **API Keys** view shows request totals for each key and its last-used time. The same data is available to an authenticated browser session through:
