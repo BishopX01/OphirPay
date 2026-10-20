@@ -55,6 +55,7 @@ impl<'a> PropHarness<'a> {
         let contract_id = env.register(OphirPayContract, ());
         let client = OphirPayContractClient::new(&env, &contract_id);
         client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         PropHarness {
             env,

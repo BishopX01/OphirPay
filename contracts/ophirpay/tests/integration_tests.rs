@@ -39,6 +39,7 @@ impl<'a> TestFixture<'a> {
         let contract_id = env.register(OphirPayContract, ());
         let client = OphirPayContractClient::new(&env, &contract_id);
         client.init(&owner);
+        client.set_timelock_enabled(&owner, &false);
 
         TestFixture {
             env,
@@ -1252,3 +1253,35 @@ fn test_set_token_decimals_bounds_and_auth() {
 
 
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIMELOCK DISPATCH
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_admin_fee_config_is_timelocked_and_dispatched() {
+    let fix = TestFixture::new();
+    // The fixture opts out for legacy tests; exercise the production default.
+    fix.client.set_timelock_enabled(&fix.owner, &true);
+    let now = fix.env.ledger().timestamp();
+
+    fix.client
+        .set_fee_config(&fix.owner, &42u32, &100u32, &200u32, &10i128, &1i128, &true);
+
+    // Queued, not applied.
+    assert!(fix.client.get_fee_config().is_none());
+    assert_eq!(fix.client.get_timelock_count(), 1);
+
+    // Premature execution is rejected.
+    assert_eq!(
+        fix.client.try_execute_timelocked_action(&1),
+        Err(Ok(PaymentError::TimelockNotDue))
+    );
+
+    fix.env.ledger().set_timestamp(now + 86_400);
+    fix.client.execute_timelocked_action(&1);
+
+    let config = fix.client.get_fee_config().expect("fee config applied");
+    assert_eq!(config.payment_fee_bps, 42);
+    assert!(fix.client.get_timelocked_action(&1).executed);
+}

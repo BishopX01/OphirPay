@@ -153,6 +153,10 @@ impl OphirPayContract {
     // ═══════════════════════════════════════════════════════════
 
     /// Configure multisig (owner only). Set threshold and signer list.
+    ///
+    /// When the admin timelock is enabled (the default) the change is queued
+    /// for 24 hours and applied by `execute_timelocked_action`; disabling the
+    /// timelock explicitly restores immediate execution.
     pub fn set_multisig_config(
         env: Env,
         caller: Address,
@@ -170,23 +174,40 @@ impl OphirPayContract {
             }
         }
 
-        if unique_signers.is_empty() {
-            return Err(PaymentError::EmptySignersList);
-        }
-
-        if unique_signers.len() > 50 {
-            return Err(PaymentError::MaxSignersExceeded);
-        }
-
-        if threshold == 0 || threshold > unique_signers.len() {
-            return Err(PaymentError::InvalidThreshold);
-        }
-
         let config = MultisigConfig {
             threshold,
             signers: unique_signers,
             enabled,
         };
+        Self::validate_multisig_config(&config)?;
+
+        if Self::timelock_is_enabled(&env) {
+            Self::queue_timelock_action(&env, &caller, TimelockAction::MultisigConfig(config))?;
+            return Ok(());
+        }
+
+        Self::apply_multisig_config(&env, &caller, config)
+    }
+
+    fn validate_multisig_config(config: &MultisigConfig) -> Result<(), PaymentError> {
+        if config.signers.is_empty() {
+            return Err(PaymentError::EmptySignersList);
+        }
+        if config.signers.len() > 50 {
+            return Err(PaymentError::MaxSignersExceeded);
+        }
+        if config.threshold == 0 || config.threshold > config.signers.len() {
+            return Err(PaymentError::InvalidThreshold);
+        }
+        Ok(())
+    }
+
+    fn apply_multisig_config(
+        env: &Env,
+        caller: &Address,
+        config: MultisigConfig,
+    ) -> Result<(), PaymentError> {
+        Self::validate_multisig_config(&config)?;
 
         // Archive previous version before overwriting
         let mut ver_count: u32 = env.storage().instance().get(&MSIG_VER_CNT).unwrap_or(0);
@@ -209,10 +230,10 @@ impl OphirPayContract {
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         record_audit(
-            &env,
+            env,
             "multisig_configured",
-            &caller,
-            threshold as u64,
+            caller,
+            config.threshold as u64,
             "Multisig configured",
         );
 
@@ -457,12 +478,6 @@ impl OphirPayContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_owner(&env, &caller)?;
-        if payment_fee_bps > 1000 || escrow_fee_bps > 1000 || stream_fee_bps > 1000 {
-            return Err(PaymentError::FeeTooHigh);
-        }
-        let prev_config: Option<FeeConfig> = env.storage().instance().get(&FEE_KEY);
-        let current_collector: Option<Address> = env.storage().instance().get(&FEE_COLL);
-
         let config = FeeConfig {
             payment_fee_bps,
             escrow_fee_bps,
@@ -471,6 +486,34 @@ impl OphirPayContract {
             batch_per_item_fee,
             enabled,
         };
+        Self::validate_fee_config(&config)?;
+
+        if Self::timelock_is_enabled(&env) {
+            Self::queue_timelock_action(&env, &caller, TimelockAction::FeeConfig(config))?;
+            return Ok(());
+        }
+
+        Self::apply_fee_config(&env, &caller, config)
+    }
+
+    fn validate_fee_config(config: &FeeConfig) -> Result<(), PaymentError> {
+        if config.payment_fee_bps > 1000
+            || config.escrow_fee_bps > 1000
+            || config.stream_fee_bps > 1000
+        {
+            return Err(PaymentError::FeeTooHigh);
+        }
+        Ok(())
+    }
+
+    fn apply_fee_config(
+        env: &Env,
+        caller: &Address,
+        config: FeeConfig,
+    ) -> Result<(), PaymentError> {
+        Self::validate_fee_config(&config)?;
+        let prev_config: Option<FeeConfig> = env.storage().instance().get(&FEE_KEY);
+        let current_collector: Option<Address> = env.storage().instance().get(&FEE_COLL);
 
         // Archive previous version before overwriting
         let mut ver_count: u32 = env.storage().instance().get(&FEE_VER_CNT).unwrap_or(0);
@@ -493,25 +536,25 @@ impl OphirPayContract {
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         record_audit(
-            &env,
+            env,
             "fee_config_set",
-            &caller,
+            caller,
             0,
             "Fee configuration updated",
         );
 
         emit_fee_config_updated(
-            &env,
+            env,
             &FeeConfigUpdated {
                 previous_collector: current_collector.clone(),
                 new_collector: current_collector,
                 previous_payment_fee_bps: prev_config.as_ref().map(|c| c.payment_fee_bps).unwrap_or(0),
-                new_payment_fee_bps: payment_fee_bps,
+                new_payment_fee_bps: config.payment_fee_bps,
                 previous_escrow_fee_bps: prev_config.as_ref().map(|c| c.escrow_fee_bps).unwrap_or(0),
-                new_escrow_fee_bps: escrow_fee_bps,
+                new_escrow_fee_bps: config.escrow_fee_bps,
                 previous_stream_fee_bps: prev_config.as_ref().map(|c| c.stream_fee_bps).unwrap_or(0),
-                new_stream_fee_bps: stream_fee_bps,
-                enabled,
+                new_stream_fee_bps: config.stream_fee_bps,
+                enabled: config.enabled,
                 updated_by: caller.clone(),
                 timestamp: env.ledger().timestamp(),
             },
@@ -663,7 +706,10 @@ impl OphirPayContract {
     //  TIMELOCKED ACTIONS — 24h delay on sensitive admin ops
     // ═══════════════════════════════════════════════════════════
 
-    /// Propose a timelocked admin action. Returns the action ID.
+    /// Propose a timelocked admin action from free-form strings. Returns the
+    /// action ID. This is the legacy compatibility entrypoint: the action is
+    /// recorded for off-chain review but has no typed payload to dispatch.
+    /// Admin setters use the typed `queue_timelock_action` path instead.
     /// After 24 hours, anyone can call `execute_timelocked_action`.
     pub fn propose_timelocked_action(
         env: Env,
@@ -675,11 +721,90 @@ impl OphirPayContract {
         caller.require_auth();
         require_owner(&env, &caller)?;
 
+        Self::store_timelock_action(
+            &env,
+            &caller,
+            action_type,
+            target,
+            data,
+            TimelockAction::Legacy,
+        )
+    }
+
+    /// Enable or disable the 24h timelock for sensitive admin actions.
+    ///
+    /// Enabled by default. Disabling is an explicit, owner-only opt-out that
+    /// restores immediate execution so a deployment can retain the previous
+    /// behaviour during migration.
+    pub fn set_timelock_enabled(
+        env: Env,
+        caller: Address,
+        enabled: bool,
+    ) -> Result<(), PaymentError> {
+        caller.require_auth();
+        require_owner(&env, &caller)?;
+        env.storage().instance().set(&TIMELOCK_ENABLED, &enabled);
+        env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
+        record_audit(
+            &env,
+            "timelock_toggled",
+            &caller,
+            0,
+            if enabled { "Timelock enabled" } else { "Timelock disabled" },
+        );
+        Ok(())
+    }
+
+    /// Whether sensitive admin actions are routed through the 24h timelock.
+    pub fn is_timelock_enabled(env: Env) -> bool {
+        Self::timelock_is_enabled(&env)
+    }
+
+    fn timelock_is_enabled(env: &Env) -> bool {
+        env.storage().instance().get(&TIMELOCK_ENABLED).unwrap_or(true)
+    }
+
+    fn action_label(action: &TimelockAction) -> &'static str {
+        match action {
+            TimelockAction::Legacy => "legacy",
+            TimelockAction::FeeConfig(_) => "set_fee_config",
+            TimelockAction::MultisigConfig(_) => "set_multisig_config",
+            TimelockAction::GrantRole(_) => "grant_role",
+            TimelockAction::GovernanceConfig(_) => "configure_governance",
+            TimelockAction::SpendingLimit(_) => "set_spending_limit",
+        }
+    }
+
+    /// Queue a typed admin action with the standard 24h delay.
+    fn queue_timelock_action(
+        env: &Env,
+        caller: &Address,
+        action: TimelockAction,
+    ) -> Result<u64, PaymentError> {
+        let label = Self::action_label(&action);
+        Self::store_timelock_action(
+            env,
+            caller,
+            String::from_str(env, label),
+            String::from_str(env, label),
+            String::from_str(env, ""),
+            action,
+        )
+    }
+
+    fn store_timelock_action(
+        env: &Env,
+        caller: &Address,
+        action_type: String,
+        target: String,
+        data: String,
+        action: TimelockAction,
+    ) -> Result<u64, PaymentError> {
         let now = env.ledger().timestamp();
         let mut count: u64 = env.storage().instance().get(&TMLOCK_CNT).unwrap_or(0);
         count = count.saturating_add(1);
 
-        let action = TimelockedAction {
+        let queued = TimelockedAction {
             id: count,
             action_type,
             target,
@@ -688,11 +813,12 @@ impl OphirPayContract {
             proposed_at: now,
             unlocks_at: now.saturating_add(TMLOCK_DELAY),
             executed: false,
+            action,
         };
 
         env.storage()
             .persistent()
-            .set(&(TIMELOCK_KEY, count), &action);
+            .set(&(TIMELOCK_KEY, count), &queued);
         env.storage()
             .persistent()
             .extend_ttl(&(TIMELOCK_KEY, count), BUMP_MIN_TTL, BUMP_MAX_TTL);
@@ -700,14 +826,14 @@ impl OphirPayContract {
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         env.events().publish(
-            (Symbol::new(&env, "timelock"), Symbol::new(&env, "proposed")),
+            (Symbol::new(env, "timelock"), Symbol::new(env, "proposed")),
             count,
         );
 
         record_audit(
-            &env,
+            env,
             "timelock_proposed",
-            &caller,
+            caller,
             count,
             "Timelocked action proposed",
         );
@@ -715,9 +841,35 @@ impl OphirPayContract {
         Ok(count)
     }
 
-    /// Execute a timelocked action after the delay has passed.
-    /// This marks it as executed; the actual state change is performed by
-    /// an off-chain relayer that reads the action data.
+    /// Dispatch a stored typed action to its state-changing implementation.
+    fn apply_timelock_action(
+        env: &Env,
+        proposed_by: &Address,
+        action: &TimelockAction,
+    ) -> Result<(), PaymentError> {
+        match action {
+            TimelockAction::Legacy => Ok(()),
+            TimelockAction::FeeConfig(config) => {
+                Self::apply_fee_config(env, proposed_by, config.clone())
+            }
+            TimelockAction::MultisigConfig(config) => {
+                Self::apply_multisig_config(env, proposed_by, config.clone())
+            }
+            TimelockAction::GrantRole(grant) => {
+                Self::apply_grant_role(env, proposed_by, grant.clone())
+            }
+            TimelockAction::GovernanceConfig(config) => {
+                Self::apply_governance_config(env, proposed_by, config.clone())
+            }
+            TimelockAction::SpendingLimit(limit) => {
+                Self::apply_spending_limit(env, proposed_by, limit.clone())
+            }
+        }
+    }
+
+    /// Execute a timelocked action after the delay has passed, dispatching the
+    /// stored typed payload to the matching admin implementation. Legacy
+    /// string-only actions are marked executed without a state change.
     pub fn execute_timelocked_action(env: Env, action_id: u64) -> Result<(), PaymentError> {
         let mut action: TimelockedAction = env
             .storage()
@@ -732,6 +884,11 @@ impl OphirPayContract {
         let now = env.ledger().timestamp();
         if now < action.unlocks_at {
             return Err(PaymentError::TimelockNotDue);
+        }
+
+        if !matches!(action.action, TimelockAction::Legacy) {
+            let payload = action.action.clone();
+            Self::apply_timelock_action(&env, &action.proposed_by, &payload)?;
         }
 
         action.executed = true;
@@ -827,22 +984,42 @@ impl OphirPayContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_owner(&env, &caller)?;
-        if quorum_bps > 10000 {
-            return Err(PaymentError::InvalidAmount);
-        }
         let config = GovernanceConfig {
             min_proposal_deposit,
             voting_period,
             quorum_bps,
             enabled,
         };
+        Self::validate_governance_config(&config)?;
+
+        if Self::timelock_is_enabled(&env) {
+            Self::queue_timelock_action(&env, &caller, TimelockAction::GovernanceConfig(config))?;
+            return Ok(());
+        }
+
+        Self::apply_governance_config(&env, &caller, config)
+    }
+
+    fn validate_governance_config(config: &GovernanceConfig) -> Result<(), PaymentError> {
+        if config.quorum_bps > 10000 {
+            return Err(PaymentError::InvalidAmount);
+        }
+        Ok(())
+    }
+
+    fn apply_governance_config(
+        env: &Env,
+        caller: &Address,
+        config: GovernanceConfig,
+    ) -> Result<(), PaymentError> {
+        Self::validate_governance_config(&config)?;
         env.storage().instance().set(&GOV_CONF, &config);
         env.storage().instance().extend_ttl(BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         record_audit(
-            &env,
+            env,
             "governance_configured",
-            &caller,
+            caller,
             0,
             "Governance configured",
         );
@@ -1109,24 +1286,49 @@ impl OphirPayContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         require_owner(&env, &caller)?;
-        let limit = SpendingLimit {
+        let action = SpendingLimitAction {
+            user,
             daily_limit,
             monthly_limit,
+            expires_at,
+            is_active,
+        };
+
+        if Self::timelock_is_enabled(&env) {
+            Self::queue_timelock_action(
+                &env,
+                &caller,
+                TimelockAction::SpendingLimit(action),
+            )?;
+            return Ok(());
+        }
+
+        Self::apply_spending_limit(&env, &caller, action)
+    }
+
+    fn apply_spending_limit(
+        env: &Env,
+        caller: &Address,
+        action: SpendingLimitAction,
+    ) -> Result<(), PaymentError> {
+        let limit = SpendingLimit {
+            daily_limit: action.daily_limit,
+            monthly_limit: action.monthly_limit,
             current_daily_spend: 0,
             current_monthly_spend: 0,
             last_reset_day: env.ledger().timestamp(),
             last_reset_month: env.ledger().timestamp(),
-            expires_at,
-            is_active,
+            expires_at: action.expires_at,
+            is_active: action.is_active,
         };
-        let key = (SPEND_LIMIT_KEY, user);
+        let key = (SPEND_LIMIT_KEY, action.user);
         env.storage().persistent().set(&key, &limit);
         env.storage().persistent().extend_ttl(&key, BUMP_MIN_TTL, BUMP_MAX_TTL);
 
         record_audit(
-            &env,
+            env,
             "spending_limit_set",
-            &caller,
+            caller,
             0,
             "Spending limit configured",
         );
@@ -1378,17 +1580,36 @@ impl OphirPayContract {
     ) -> Result<(), PaymentError> {
         caller.require_auth();
         Self::require_role(&env, caller.clone(), Role::Admin)?;
-        let grantee_clone = grantee.clone();
-        let role_clone = role.clone();
-        let key = (ROLE_KEY, grantee);
-        env.storage().persistent().set(&key, &role);
+
+        if Self::timelock_is_enabled(&env) {
+            Self::queue_timelock_action(
+                &env,
+                &caller,
+                TimelockAction::GrantRole(RoleGrantAction {
+                    grantee,
+                    role,
+                }),
+            )?;
+            return Ok(());
+        }
+
+        Self::apply_grant_role(&env, &caller, RoleGrantAction { grantee, role })
+    }
+
+    fn apply_grant_role(
+        env: &Env,
+        caller: &Address,
+        grant: RoleGrantAction,
+    ) -> Result<(), PaymentError> {
+        let key = (ROLE_KEY, grant.grantee.clone());
+        env.storage().persistent().set(&key, &grant.role);
         env.storage().persistent().extend_ttl(&key, BUMP_MIN_TTL, BUMP_MAX_TTL);
         env.events().publish(
-            (Symbol::new(&env, "rbac"), Symbol::new(&env, "grant")),
-            (grantee_clone, role_clone),
+            (Symbol::new(env, "rbac"), Symbol::new(env, "grant")),
+            (grant.grantee, grant.role),
         );
 
-        record_audit(&env, "role_granted", &caller, 0, "Role granted");
+        record_audit(env, "role_granted", caller, 0, "Role granted");
 
         Ok(())
     }
@@ -1799,7 +2020,7 @@ impl OphirPayContract {
             }
             id += 1;
         }
-        paused
+        paused
     }
 
     /// Owner-only: pause or resume specific subsystems using capability bitflags (#1358).
