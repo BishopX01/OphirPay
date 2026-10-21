@@ -172,9 +172,10 @@ impl OphirPayContract {
 
         let mut unique_signers = Vec::new(&env);
         for signer in signers.into_iter() {
-            if !unique_signers.contains(signer.clone()) {
-                unique_signers.push_back(signer);
+            if unique_signers.contains(signer.clone()) {
+                return Err(PaymentError::DuplicateSigner);
             }
+            unique_signers.push_back(signer);
         }
 
         let config = MultisigConfig {
@@ -196,11 +197,19 @@ impl OphirPayContract {
         if config.signers.is_empty() {
             return Err(PaymentError::EmptySignersList);
         }
-        if config.signers.len() > 50 {
+        if config.signers.len() > 10 {
             return Err(PaymentError::MaxSignersExceeded);
         }
         if config.threshold == 0 || config.threshold > config.signers.len() {
             return Err(PaymentError::InvalidThreshold);
+        }
+        for i in 0..config.signers.len() {
+            let signer = config.signers.get(i).unwrap();
+            for j in (i + 1)..config.signers.len() {
+                if signer == config.signers.get(j).unwrap() {
+                    return Err(PaymentError::DuplicateSigner);
+                }
+            }
         }
         Ok(())
     }

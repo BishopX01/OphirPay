@@ -355,6 +355,7 @@ export enum PaymentErrorCode {
   InvalidThreshold = 314,
   EmptySignersList = 315,
   DisputeCoolingOffActive = 316,
+  DuplicateSigner = 318,
 }
 
 export const PAYMENT_ERROR_MESSAGES: Record<number, string> = {
@@ -418,4 +419,5 @@ export const PAYMENT_ERROR_MESSAGES: Record<number, string> = {
   314: "Threshold cannot be zero or exceed signer count",
   315: "Signers list cannot be empty",
   316: "Dispute cooling-off period is still active",
+  318: "Duplicate signer address in multisig config",
 };

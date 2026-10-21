@@ -682,6 +682,9 @@ pub enum PaymentError {
     // ── Spending Window Guards (317) ───────────────────────
     /// Requested spend exceeds the remaining daily/monthly limit
     SpendingLimitExceeded = 317,
+    // ── Multisig Signer Deduplication (318) ─────────────────────
+    /// Duplicate signer address in multisig config
+    DuplicateSigner = 318,
 }
 
 impl PaymentError {
