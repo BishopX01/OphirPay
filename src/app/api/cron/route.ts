@@ -26,12 +26,21 @@ import {
   processWebhookRetryQueue,
   type WebhookRetryQueueSummary,
 } from "@/lib/webhook-delivery-service";
-import { incCronLogsPruned } from "@/lib/metrics-counters";
+import { incCronLogsPruned, incApiKeyLogsPruned } from "@/lib/metrics-counters";
 
 export const CRON_LOG_RETENTION_DAYS = 90;
 export const CRON_LOG_PRUNE_BATCH_SIZE = 1000;
 
+export const API_KEY_LOG_RETENTION_DAYS = 90;
+export const API_KEY_LOG_PRUNE_BATCH_SIZE = 1000;
+
 export interface PruneCronLogsResult {
+  prunedCount: number;
+  batches: number;
+  cutoffDate: Date;
+}
+
+export interface PruneApiKeyRequestLogsResult {
   prunedCount: number;
   batches: number;
   cutoffDate: Date;
@@ -101,6 +110,67 @@ export async function pruneCronExecutionLogs(
 }
 
 /**
+ * Prunes API key request logs older than retention window (90 days) in batches of 1,000 (issue #1830).
+ *
+ * Deletions execute in bounded batches to avoid table locks and memory spikes on high-traffic databases.
+ */
+export async function pruneApiKeyRequestLogs(
+  options: {
+    retentionDays?: number;
+    batchSize?: number;
+    now?: Date;
+  } = {}
+): Promise<PruneApiKeyRequestLogsResult> {
+  const retentionDays = options.retentionDays ?? API_KEY_LOG_RETENTION_DAYS;
+  const batchSize = options.batchSize ?? API_KEY_LOG_PRUNE_BATCH_SIZE;
+  const now = options.now ?? new Date();
+  const cutoffDate = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
+
+  let totalPruned = 0;
+  let batches = 0;
+
+  while (true) {
+    const oldLogs = await prisma.apiKeyRequestLog.findMany({
+      where: {
+        createdAt: { lt: cutoffDate },
+      },
+      select: { id: true },
+      take: batchSize,
+    });
+
+    if (oldLogs.length === 0) break;
+
+    const ids = oldLogs.map((log) => log.id);
+
+    const deleteResult = await prisma.$transaction(async (tx) => {
+      return tx.apiKeyRequestLog.deleteMany({
+        where: {
+          id: { in: ids },
+        },
+      });
+    });
+
+    totalPruned += deleteResult.count;
+    batches += 1;
+    incApiKeyLogsPruned(deleteResult.count);
+
+    if (oldLogs.length < batchSize) break;
+  }
+
+  logger.info("API key request logs pruned", {
+    prunedCount: totalPruned,
+    batches,
+    cutoffDate: cutoffDate.toISOString(),
+  });
+
+  return {
+    prunedCount: totalPruned,
+    batches,
+    cutoffDate,
+  };
+}
+
+/**
  * Scheduled payment execution (issue #175).
  *
  * GitHub Actions Cron calls this endpoint every 5 minutes (see
@@ -150,6 +220,8 @@ interface RunSummary {
   webhookRetries: WebhookRetryQueueSummary;
   /** Number of expired cron logs pruned during this run (issue #1420). */
   prunedLogs?: number;
+  /** Number of expired API key request logs pruned during this run (issue #1830). */
+  prunedApiKeyLogs?: number;
 }
 
 /**
@@ -194,10 +266,13 @@ async function runScheduledPayments(request: Request) {
 
     if (task === "cleanup") {
       const pruneResult = await pruneCronExecutionLogs();
+      const apiKeyPruneResult = await pruneApiKeyRequestLogs();
       return successResponse({
         prunedCount: pruneResult.prunedCount,
         batches: pruneResult.batches,
         cutoffDate: pruneResult.cutoffDate.toISOString(),
+        apiKeyLogsPruned: apiKeyPruneResult.prunedCount,
+        apiKeyBatches: apiKeyPruneResult.batches,
       });
     }
 
@@ -396,6 +471,16 @@ async function runScheduledPayments(request: Request) {
       logger.warn("Failed to prune expired cron logs", { error: pruneErr });
     }
 
+    // 3. Prune ephemeral API key request logs older than retention window (90 days) in batches of 1,000 (issue #1830)
+    try {
+      const apiKeyPruneResult = await pruneApiKeyRequestLogs();
+      if (apiKeyPruneResult.prunedCount > 0) {
+        summary.prunedApiKeyLogs = apiKeyPruneResult.prunedCount;
+      }
+    } catch (pruneErr) {
+      logger.warn("Failed to prune expired API key request logs", { error: pruneErr });
+    }
+
     logger.info("Scheduled payment run complete", {
       runId,
       picked: summary.picked,
@@ -403,6 +488,7 @@ async function runScheduledPayments(request: Request) {
       failed: summary.failed,
       skipped: summary.skipped,
       prunedLogs: summary.prunedLogs,
+      prunedApiKeyLogs: summary.prunedApiKeyLogs,
     });
 
     return successResponse(summary);
