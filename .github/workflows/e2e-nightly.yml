@@ -144,19 +144,34 @@ jobs:
           NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000 \
             node .next/standalone/server.js > /tmp/next-server.log 2>&1 &
 
+          # Wait for the process independently of database and upstream health.
           for _ in $(seq 1 60); do
-            # /api/health returns 200 (healthy) or 503 (degraded — a Stellar or
-            # Redis dependency is unreachable). Either one proves the server is up
-            # and past environment validation.
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$E2E_BASE_URL/api/health" || true)
-            if [ "$code" = "200" ] || [ "$code" = "503" ]; then
-              echo "✅ Server ready (HTTP $code)"
-              exit 0
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$E2E_BASE_URL/api/health/live" || true)
+            if [ "$code" = "200" ]; then
+              echo "✅ Server live (HTTP $code)"
+              break
             fi
             sleep 1
           done
 
-          echo "::error::Server did not become ready within 60s"
+          if [ "$code" != "200" ]; then
+            echo "::error::Server did not become live within 60s"
+            cat /tmp/next-server.log
+            exit 1
+          fi
+
+          # /api/health returns 503 only when the critical database check fails;
+          # optional Stellar or Redis failures are reported as degraded with 200.
+          code=$(curl -sS -o /tmp/api-health.json -w "%{http_code}" "$E2E_BASE_URL/api/health" || true)
+          if [ "$code" = "200" ]; then
+            echo "✅ Readiness OK (HTTP $code)"
+            exit 0
+          fi
+
+          echo "::error::/api/health did not return 200 (HTTP ${code:-<none>})"
+          echo "Health response body:"
+          cat /tmp/api-health.json 2>/dev/null || true
+          echo "Server log:"
           cat /tmp/next-server.log
           exit 1
 
