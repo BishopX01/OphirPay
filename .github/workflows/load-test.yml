@@ -165,6 +165,9 @@ jobs:
         run: npx prisma generate
 
       - name: Create the schema in the CI database
+        # This job uses a disposable PostgreSQL service solely to seed the
+        # synthetic load-test dataset; migration history is exercised by E2E
+        # and Docker smoke workflows.
         run: npx prisma db push --skip-generate
 
       - name: Mint an API key and seed realistic rows
