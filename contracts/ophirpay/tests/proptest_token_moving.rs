@@ -9,7 +9,9 @@
 //! 2. Include reentrancy-shaped call sequences asserting ReentrantCall rejection.
 //! 3. Runs in CI with bounded iterations (ProptestConfig::with_cases(64)).
 
-use ophirpay_contract::{compute_vested, OphirPayContract, OphirPayContractClient, PaymentError};
+use ophirpay_contract::{
+    compute_vested, OphirPayContract, OphirPayContractClient, PaymentError, MIN_STREAM_DURATION,
+};
 use proptest::prelude::*;
 use proptest::test_runner::Config as ProptestConfig;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
@@ -323,7 +325,10 @@ proptest! {
     #[test]
     fn prop_stream_cancellation_prorata_solvency(
         total_amount in 100i128..=1_000_000_000i128,
-        duration in 10u64..=100_000u64,
+        // `create_stream` rejects durations below MIN_STREAM_DURATION (60), so
+        // generating anything shorter only exercises the validation guard and
+        // makes the property fail on inputs that can never produce a stream.
+        duration in MIN_STREAM_DURATION..=100_000u64,
         elapsed in 0u64..=150_000u64,
     ) {
         let h = PropHarness::new();
