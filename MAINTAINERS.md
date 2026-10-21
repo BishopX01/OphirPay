@@ -24,7 +24,7 @@ Per [CODEOWNERS](.github/CODEOWNERS), PRs are auto-assigned to these teams:
 ## Contact
 
 - **General**: hello@ophirpay.dev
-- **Security**: security@ophirpay.dev
+- **Security**: GitHub private advisory — see [SECURITY.md](SECURITY.md) (report by email is unavailable while no monitored mailbox is provisioned, issue #1280)
 - **Conduct**: conduct@ophirpay.dev
 
 ## Emeritus
