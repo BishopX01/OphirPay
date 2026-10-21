@@ -684,4 +684,10 @@ pub enum PaymentError {
     SpendingLimitExceeded = 317,
 }
 
+impl PaymentError {
+    /// Alias for NoPendingOwner (Issue #1286: semantic ownership error variant).
+    #[allow(non_upper_case_globals)]
+    pub const OwnershipTransferNotProposed: PaymentError = PaymentError::NoPendingOwner;
+}
+
 
