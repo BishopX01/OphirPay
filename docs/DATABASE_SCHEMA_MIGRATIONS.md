@@ -42,6 +42,7 @@ erDiagram
 | **`ApiKey`** | `id` (CUID) | Programmatic authentication storing SHA-256 `keyHash` and 8-character display `prefix`. | `userId → User(id)` |
 | **`NotificationHook`** | `id` (CUID) | Mirrors on-chain Soroban event hooks to route contract signals. | `userId → User(id)` |
 | **`CronExecutionLog`** | `id` (CUID) | Ephemeral run audit records of scheduled payment runs. Pruned automatically after 90 days. | None |
+| **`ApiKeyRequestLog`** | `id` (CUID) | Ephemeral per-request usage tracking records for API keys. Pruned automatically after 90 days. | `keyId → ApiKey(id)` |
 
 ---
 
