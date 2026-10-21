@@ -324,6 +324,7 @@ export enum PaymentError {
   EmptySignersList = 315,
   DisputeCoolingOffActive = 316,
   SpendingLimitExceeded = 317,
+  DuplicateSigner = 318,
 }
 
 export const PAYMENT_ERROR_NAMES: Record<number, string> = {
@@ -644,6 +645,7 @@ export const PAYMENT_ERROR_NAMES: Record<number, string> = {
   315: "EmptySignersList",
   316: "DisputeCoolingOffActive",
   317: "SpendingLimitExceeded",
+  318: "DuplicateSigner",
 };
 
 export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
@@ -964,6 +966,7 @@ export const PAYMENT_ERROR_DISCRIMINANTS: Record<string, number> = {
   "EmptySignersList": 315,
   "DisputeCoolingOffActive": 316,
   "SpendingLimitExceeded": 317,
+  "DuplicateSigner": 318,
 };
 
 export const ERROR_MESSAGES: Record<number, string> = {
@@ -1284,4 +1287,5 @@ export const ERROR_MESSAGES: Record<number, string> = {
   315: "Signers list cannot be empty",
   316: "Dispute cooling-off period is still active",
   317: "Requested spend exceeds the remaining daily/monthly limit",
+  318: "Duplicate signer address in multisig config",
 };

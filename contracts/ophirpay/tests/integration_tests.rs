@@ -1522,3 +1522,66 @@ fn test_admin_fee_config_is_timelocked_and_dispatched() {
     assert_eq!(config.payment_fee_bps, 42);
     assert!(fix.client.get_timelocked_action(&1).executed);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MULTISIG CONFIG VALIDATION (Issue #1285)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_multisig_rejects_duplicate_signers() {
+    let fix = TestFixture::new();
+    let signer1 = Address::generate(&fix.env);
+    let signer2 = Address::generate(&fix.env);
+
+    // Pass duplicate signer1
+    let signers = Vec::from_array(&fix.env, [signer1.clone(), signer2.clone(), signer1.clone()]);
+    let res = fix.client.try_set_multisig_config(&fix.owner, &2u32, &signers, &true);
+    assert_eq!(res, Err(Ok(PaymentError::DuplicateSigner)));
+}
+
+#[test]
+fn test_multisig_rejects_max_signers_exceeded() {
+    let fix = TestFixture::new();
+    let a0 = Address::generate(&fix.env);
+    let a1 = Address::generate(&fix.env);
+    let a2 = Address::generate(&fix.env);
+    let a3 = Address::generate(&fix.env);
+    let a4 = Address::generate(&fix.env);
+    let a5 = Address::generate(&fix.env);
+    let a6 = Address::generate(&fix.env);
+    let a7 = Address::generate(&fix.env);
+    let a8 = Address::generate(&fix.env);
+    let a9 = Address::generate(&fix.env);
+    let a10 = Address::generate(&fix.env);
+    let signers = Vec::from_array(&fix.env, [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10]);
+
+    let res = fix.client.try_set_multisig_config(&fix.owner, &2u32, &signers, &true);
+    assert_eq!(res, Err(Ok(PaymentError::MaxSignersExceeded)));
+}
+
+#[test]
+fn test_multisig_rejects_threshold_greater_than_signer_count() {
+    let fix = TestFixture::new();
+    let signer1 = Address::generate(&fix.env);
+    let signer2 = Address::generate(&fix.env);
+    let signers = Vec::from_array(&fix.env, [signer1, signer2]);
+
+    // Threshold 3 with 2 signers
+    let res = fix.client.try_set_multisig_config(&fix.owner, &3u32, &signers, &true);
+    assert_eq!(res, Err(Ok(PaymentError::InvalidThreshold)));
+}
+
+#[test]
+fn test_multisig_valid_config_succeeds() {
+    let fix = TestFixture::new();
+    let signer1 = Address::generate(&fix.env);
+    let signer2 = Address::generate(&fix.env);
+    let signer3 = Address::generate(&fix.env);
+    let signers = Vec::from_array(&fix.env, [signer1, signer2, signer3]);
+
+    let res = fix.client.try_set_multisig_config(&fix.owner, &2u32, &signers, &true);
+    assert_eq!(res, Ok(Ok(())));
+    let config = fix.client.get_multisig_config().unwrap();
+    assert_eq!(config.threshold, 2);
+    assert_eq!(config.signers.len(), 3);
+}
