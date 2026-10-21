@@ -1522,3 +1522,28 @@ fn test_admin_fee_config_is_timelocked_and_dispatched() {
     assert_eq!(config.payment_fee_bps, 42);
     assert!(fix.client.get_timelocked_action(&1).executed);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ISSUE #1286: ERROR CODE SEMANTICS (HOOKS & OWNERSHIP)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_unregister_nonexistent_hook_returns_hook_not_found() {
+    let fix = TestFixture::new();
+    let caller = Address::generate(&fix.env);
+
+    // Attempting to unregister a hook that does not exist must return HookNotFound
+    let res = fix.client.try_unregister_hook(&caller, &999);
+    assert_eq!(res, Err(Ok(PaymentError::HookNotFound)));
+}
+
+#[test]
+fn test_accept_ownership_without_pending_transfer_returns_ownership_error() {
+    let fix = TestFixture::new();
+    let caller = Address::generate(&fix.env);
+
+    // Attempting to accept ownership when no transfer was proposed must return NoPendingOwner / OwnershipTransferNotProposed
+    let res = fix.client.try_accept_ownership(&caller);
+    assert_eq!(res, Err(Ok(PaymentError::NoPendingOwner)));
+    assert_eq!(res, Err(Ok(PaymentError::OwnershipTransferNotProposed)));
+}

@@ -95,6 +95,9 @@ describe("ERROR_CODES", () => {
     expect(ERROR_CODES.ACCOUNT_NOT_FOUND).toBeDefined();
     expect(ERROR_CODES.CONTRACT_NOT_FOUND).toBeDefined();
     expect(ERROR_CODES.ROUTE_NOT_FOUND).toBeDefined();
+    expect(ERROR_CODES.HOOK_NOT_FOUND).toBeDefined();
+    expect(ERROR_CODES.NO_PENDING_OWNER).toBeDefined();
+    expect(ERROR_CODES.OWNERSHIP_TRANSFER_NOT_PROPOSED).toBeDefined();
   });
 
   it("408 timeout codes are defined", () => {
