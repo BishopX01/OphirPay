@@ -40,6 +40,8 @@ const counters = {
   database_pool_wait_seconds: 0,
   /** Counter: cumulative cron execution logs pruned older than retention window (issue #1420). */
   cron_logs_pruned_total: 0,
+  /** Counter: cumulative API key request logs pruned older than retention window (issue #1830). */
+  api_key_logs_pruned_total: 0,
   /** Counter: cumulative RPC circuit breaker trips to OPEN state (issue #1421). */
   rpc_circuit_breaker_trips_total: 0,
   /** Gauge: currently active WebSocket connections (issue #1829). */
@@ -48,46 +50,9 @@ const counters = {
   ws_broadcast_frames_total: 0,
 };
 
-export type WsDisconnectReason =
-  | "client_close"
-  | "slow_consumer"
-  | "ping_timeout"
-  | "socket_error";
-
-const wsDisconnections = new Map<WsDisconnectReason, number>([
-  ["client_close", 0],
-  ["slow_consumer", 0],
-  ["ping_timeout", 0],
-  ["socket_error", 0],
-]);
-
-/** Increment or decrement active WebSocket connection gauge (issue #1829). */
-export function incWsActiveConnections(delta = 1): void {
-  counters.ws_active_connections = Math.max(0, counters.ws_active_connections + delta);
-}
-
-export function decWsActiveConnections(delta = 1): void {
-  counters.ws_active_connections = Math.max(0, counters.ws_active_connections - delta);
-}
-
-/** Increment counter for WebSocket disconnections by reason (issue #1829). */
-export function incWsDisconnections(reason: WsDisconnectReason, delta = 1): void {
-  wsDisconnections.set(reason, (wsDisconnections.get(reason) ?? 0) + delta);
-}
-
-/** Increment counter for broadcast frames sent (issue #1829). */
-export function incWsBroadcastFrames(delta = 1): void {
-  counters.ws_broadcast_frames_total += delta;
-}
-
-/** Get snapshot of WebSocket disconnections by reason. */
-export function getWsDisconnectionsSnapshot(): Record<WsDisconnectReason, number> {
-  return {
-    client_close: wsDisconnections.get("client_close") ?? 0,
-    slow_consumer: wsDisconnections.get("slow_consumer") ?? 0,
-    ping_timeout: wsDisconnections.get("ping_timeout") ?? 0,
-    socket_error: wsDisconnections.get("socket_error") ?? 0,
-  };
+/** Increment the API key request logs pruned counter (issue #1830). */
+export function incApiKeyLogsPruned(count = 1): void {
+  counters.api_key_logs_pruned_total += count;
 }
 
 /** Increment the cron logs pruned counter (issue #1420). */

@@ -782,6 +782,8 @@ model ApiKeyRequestLog {
 
   /// Speeds up per-key usage windows ("requests in the last N days").
   @@index([keyId, createdAt])
+  /// Speeds up global retention pruning ("prune logs older than 90 days").
+  @@index([createdAt])
 }
 
 // ── Payment Status Sync (Horizon reconciliation job) ─────────

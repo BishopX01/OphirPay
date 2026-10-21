@@ -26,7 +26,10 @@ export async function GET(request: Request) {
       select: { id: true, name: true, prefix: true, lastUsed: true, createdAt: true, expiresAt: true },
     });
     const requests = await prisma.apiKeyRequestLog.findMany({
-      where: { key: { userId: auth.userId } },
+      where: {
+        key: { userId: auth.userId },
+        createdAt: { gte: since },
+      },
       select: { keyId: true, createdAt: true },
     });
 

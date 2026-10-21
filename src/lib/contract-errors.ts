@@ -314,7 +314,7 @@ export const CONTRACT_ERROR_MAP: Record<string, string> = {
   "303": "Revocation already executed",
   "304": "Cannot revoke self",
   "305": "No pending ownership transfer",
-  "306": "Math overflow",
+  "306": "Arithmetic overflow (checked arithmetic exceeded the i128/u64 range)",
   "307": "Stream accounting invariant violated: refused to pay an inconsistent amount",
   "308": "Pause scope not recognized: unknown scope identifier",
   "309": "Idempotency key was reused for a different payment payload",
