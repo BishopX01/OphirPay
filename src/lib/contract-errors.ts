@@ -326,6 +326,7 @@ export const CONTRACT_ERROR_MAP: Record<string, string> = {
   "315": "Signers list cannot be empty",
   "316": "Dispute cooling-off period is still active",
   "317": "Requested spend exceeds the remaining daily/monthly limit",
+  "318": "Duplicate signer address in multisig config",
 };
 
 /**
