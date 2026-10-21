@@ -44,6 +44,10 @@ const counters = {
   api_key_logs_pruned_total: 0,
   /** Counter: cumulative RPC circuit breaker trips to OPEN state (issue #1421). */
   rpc_circuit_breaker_trips_total: 0,
+  /** Gauge: currently active WebSocket connections (issue #1829). */
+  ws_active_connections: 0,
+  /** Counter: cumulative WebSocket broadcast frames sent to clients (issue #1829). */
+  ws_broadcast_frames_total: 0,
 };
 
 /** Increment the API key request logs pruned counter (issue #1830). */
@@ -274,6 +278,7 @@ export function getMetricsSnapshot(): typeof counters & {
     route: string;
     observation: SseDurationObservation;
   }>;
+  ws_disconnections: Record<WsDisconnectReason, number>;
 } {
   return {
     ...counters,
@@ -291,6 +296,7 @@ export function getMetricsSnapshot(): typeof counters & {
     csp_reports_dropped: getCspReportsDroppedSnapshot(),
     sse_active_connections: getSseActiveConnections(),
     sse_connection_durations: getSseDurations(),
+    ws_disconnections: getWsDisconnectionsSnapshot(),
   };
 }
 
@@ -310,6 +316,9 @@ export function resetMetricsForTest(): void {
   dbQueryHistograms.clear();
   for (const reason of ["rate_limited", "deduplicated", "oversized"] as CspReportDropReason[]) {
     cspReportsDropped.set(reason, 0);
+  }
+  for (const reason of ["client_close", "slow_consumer", "ping_timeout", "socket_error"] as WsDisconnectReason[]) {
+    wsDisconnections.set(reason, 0);
   }
   sseActiveConnections.set("events", 0);
   sseActiveConnections.set("audit-log", 0);

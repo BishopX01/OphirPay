@@ -29,6 +29,13 @@ import {
   type LiveEvent,
   type LiveEventSource,
 } from "./event-source";
+import {
+  incWsActiveConnections,
+  decWsActiveConnections,
+  incWsDisconnections,
+  incWsBroadcastFrames,
+  type WsDisconnectReason,
+} from "../metrics-counters";
 
 export interface WsServerOptions {
   port?: number;
@@ -52,6 +59,7 @@ export const WS_MAX_BUFFERED_BYTES = 256 * 1024;
 interface WsClient {
   socket: Duplex;
   alive: boolean;
+  disconnectRecorded?: boolean;
 }
 
 export class LiveEventsWsServer {
@@ -115,17 +123,26 @@ export class LiveEventsWsServer {
     for (const client of this.clients) {
       this.sendFrame(client, frame);
     }
+    incWsBroadcastFrames();
   }
 
   private get maxBufferedBytes(): number {
     return this.options.maxBufferedBytes ?? WS_MAX_BUFFERED_BYTES;
   }
 
+  private removeClient(client: WsClient, reason: WsDisconnectReason): void {
+    if (client.disconnectRecorded) return;
+    client.disconnectRecorded = true;
+    this.clients.delete(client);
+    decWsActiveConnections();
+    incWsDisconnections(reason);
+  }
+
   /** Write a frame, disconnecting the client when its buffer is over budget. */
   private sendFrame(client: WsClient, frame: Buffer): void {
     const buffered = client.socket.writableLength ?? 0;
     if (buffered + frame.length > this.maxBufferedBytes) {
-      this.clients.delete(client);
+      this.removeClient(client, "slow_consumer");
       try {
         client.socket.destroy();
       } catch {
@@ -148,7 +165,7 @@ export class LiveEventsWsServer {
     this.heartbeatTimer = setInterval(() => {
       for (const client of this.clients) {
         if (!client.alive) {
-          this.clients.delete(client);
+          this.removeClient(client, "ping_timeout");
           client.socket.destroy();
           continue;
         }
@@ -170,6 +187,7 @@ export class LiveEventsWsServer {
     this.source = null;
 
     for (const client of this.clients) {
+      this.removeClient(client, "client_close");
       try {
         client.socket.end(encodeFrame(OPCODE_CLOSE, Buffer.alloc(0)));
       } catch {
@@ -210,8 +228,9 @@ export class LiveEventsWsServer {
         "\r\n"
     );
 
-    const client: WsClient = { socket, alive: true };
+    const client: WsClient = { socket, alive: true, disconnectRecorded: false };
     this.clients.add(client);
+    incWsActiveConnections();
 
     // Announce the connection with the same event the SSE route emits.
     socket.write(
@@ -232,14 +251,14 @@ export class LiveEventsWsServer {
       }
     });
 
-    const cleanup = () => {
-      this.clients.delete(client);
+    const cleanup = (reason: WsDisconnectReason = "client_close") => {
+      this.removeClient(client, reason);
       socket.removeAllListeners("data");
       socket.removeAllListeners("close");
       socket.removeAllListeners("error");
     };
-    socket.on("close", cleanup);
-    socket.on("error", cleanup);
+    socket.on("close", () => cleanup("client_close"));
+    socket.on("error", () => cleanup("socket_error"));
   }
 
   private handleFrame(client: WsClient, frame: { opcode: number; payload: Buffer }): void {
@@ -252,6 +271,7 @@ export class LiveEventsWsServer {
         client.alive = true;
         break;
       case OPCODE_CLOSE:
+        this.removeClient(client, "client_close");
         // Echo the close frame and close the socket.
         try {
           client.socket.end(encodeFrame(OPCODE_CLOSE, frame.payload));
