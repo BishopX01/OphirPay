@@ -361,7 +361,22 @@ export async function buildMetrics(): Promise<string> {
     ...c.sse_active_connections.map(
       (m) =>
         `ophirpay_sse_active_connections{route="${escapeLabelValue(m.route)}"} ${m.count}`
-    )
+    ),
+    "",
+    "# HELP ophirpay_ws_active_connections Currently active WebSocket client connections",
+    "# TYPE ophirpay_ws_active_connections gauge",
+    `ophirpay_ws_active_connections ${c.ws_active_connections}`,
+    "",
+    "# HELP ophirpay_ws_disconnections_total WebSocket disconnections partitioned by reason",
+    "# TYPE ophirpay_ws_disconnections_total counter",
+    `ophirpay_ws_disconnections_total{reason="client_close"} ${c.ws_disconnections.client_close}`,
+    `ophirpay_ws_disconnections_total{reason="slow_consumer"} ${c.ws_disconnections.slow_consumer}`,
+    `ophirpay_ws_disconnections_total{reason="ping_timeout"} ${c.ws_disconnections.ping_timeout}`,
+    `ophirpay_ws_disconnections_total{reason="socket_error"} ${c.ws_disconnections.socket_error}`,
+    "",
+    "# HELP ophirpay_ws_broadcast_frames_total Total WebSocket broadcast frames sent to clients",
+    "# TYPE ophirpay_ws_broadcast_frames_total counter",
+    `ophirpay_ws_broadcast_frames_total ${c.ws_broadcast_frames_total}`
   );
 
   // ── SSE Connection Durations (issue #1425) ──────────────────

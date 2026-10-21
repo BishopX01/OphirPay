@@ -682,6 +682,15 @@ pub enum PaymentError {
     // ── Spending Window Guards (317) ───────────────────────
     /// Requested spend exceeds the remaining daily/monthly limit
     SpendingLimitExceeded = 317,
+    // ── Multisig Signer Deduplication (318) ─────────────────────
+    /// Duplicate signer address in multisig config
+    DuplicateSigner = 318,
+}
+
+impl PaymentError {
+    /// Alias for NoPendingOwner (Issue #1286: semantic ownership error variant).
+    #[allow(non_upper_case_globals)]
+    pub const OwnershipTransferNotProposed: PaymentError = PaymentError::NoPendingOwner;
 }
 
 
