@@ -42,7 +42,53 @@ const counters = {
   cron_logs_pruned_total: 0,
   /** Counter: cumulative RPC circuit breaker trips to OPEN state (issue #1421). */
   rpc_circuit_breaker_trips_total: 0,
+  /** Gauge: currently active WebSocket connections (issue #1829). */
+  ws_active_connections: 0,
+  /** Counter: cumulative WebSocket broadcast frames sent to clients (issue #1829). */
+  ws_broadcast_frames_total: 0,
 };
+
+export type WsDisconnectReason =
+  | "client_close"
+  | "slow_consumer"
+  | "ping_timeout"
+  | "socket_error";
+
+const wsDisconnections = new Map<WsDisconnectReason, number>([
+  ["client_close", 0],
+  ["slow_consumer", 0],
+  ["ping_timeout", 0],
+  ["socket_error", 0],
+]);
+
+/** Increment or decrement active WebSocket connection gauge (issue #1829). */
+export function incWsActiveConnections(delta = 1): void {
+  counters.ws_active_connections = Math.max(0, counters.ws_active_connections + delta);
+}
+
+export function decWsActiveConnections(delta = 1): void {
+  counters.ws_active_connections = Math.max(0, counters.ws_active_connections - delta);
+}
+
+/** Increment counter for WebSocket disconnections by reason (issue #1829). */
+export function incWsDisconnections(reason: WsDisconnectReason, delta = 1): void {
+  wsDisconnections.set(reason, (wsDisconnections.get(reason) ?? 0) + delta);
+}
+
+/** Increment counter for broadcast frames sent (issue #1829). */
+export function incWsBroadcastFrames(delta = 1): void {
+  counters.ws_broadcast_frames_total += delta;
+}
+
+/** Get snapshot of WebSocket disconnections by reason. */
+export function getWsDisconnectionsSnapshot(): Record<WsDisconnectReason, number> {
+  return {
+    client_close: wsDisconnections.get("client_close") ?? 0,
+    slow_consumer: wsDisconnections.get("slow_consumer") ?? 0,
+    ping_timeout: wsDisconnections.get("ping_timeout") ?? 0,
+    socket_error: wsDisconnections.get("socket_error") ?? 0,
+  };
+}
 
 /** Increment the cron logs pruned counter (issue #1420). */
 export function incCronLogsPruned(count = 1): void {
@@ -267,6 +313,7 @@ export function getMetricsSnapshot(): typeof counters & {
     route: string;
     observation: SseDurationObservation;
   }>;
+  ws_disconnections: Record<WsDisconnectReason, number>;
 } {
   return {
     ...counters,
@@ -284,6 +331,7 @@ export function getMetricsSnapshot(): typeof counters & {
     csp_reports_dropped: getCspReportsDroppedSnapshot(),
     sse_active_connections: getSseActiveConnections(),
     sse_connection_durations: getSseDurations(),
+    ws_disconnections: getWsDisconnectionsSnapshot(),
   };
 }
 
@@ -303,6 +351,9 @@ export function resetMetricsForTest(): void {
   dbQueryHistograms.clear();
   for (const reason of ["rate_limited", "deduplicated", "oversized"] as CspReportDropReason[]) {
     cspReportsDropped.set(reason, 0);
+  }
+  for (const reason of ["client_close", "slow_consumer", "ping_timeout", "socket_error"] as WsDisconnectReason[]) {
+    wsDisconnections.set(reason, 0);
   }
   sseActiveConnections.set("events", 0);
   sseActiveConnections.set("audit-log", 0);
